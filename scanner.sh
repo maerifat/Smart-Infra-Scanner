@@ -165,14 +165,41 @@ createIngressRules () {
     echo "Allowing SSH on port 22 for $securityGroupId ($securityGroupName)."
 }
 
-
-
-
-
-##CLEANSING
+##BUILDING END
 ####
 ####
 
+
+
+
+runInstance () {
+
+    intanceId=$(aws ec2 run-instances $ad\
+    --image-id ami-04893cdb768d0f9ee \
+    --instance-type t2.micro \
+    --subnet-id $pubSubnetId \
+    --security-group-ids $securityGroupId \
+    --associate-public-ip-address \
+    --key-name $keyName \
+    --output text --query 'Instances[0].InstanceId')
+
+    echo "Ec2 Instance $intanceId has been started."
+}
+
+
+
+
+
+
+
+##CLEANSING START
+####
+####
+
+terminateInstance () {
+    aws ec2 terminate-instances --instance-ids $intanceId $ad
+    echo "Delete VPC $intanceId"
+}
 
 deleteSecurityGroup () {
     ## Delete custom security group
@@ -229,8 +256,6 @@ deleteVPC () {
 
 
 
-
-
 build () {
     echo ""
     echo "########## STAGE [1/3] - BUILDING ##########"
@@ -248,9 +273,11 @@ build () {
     associatePubSubnetWithRouteTable
     createSecurityGroup
     createIngressRules
+    runInstance
     
     
 }
+
 
 
 
@@ -267,6 +294,8 @@ clean () {
     echo ""
     echo "########## STAGE [3/3] - CLEANING ##########"
     echo ""
+    terminateInstance
+    sleep 20
     deleteSecurityGroup
     disassociatePubSubnetFromRouteTable
     deleteRouteTable
