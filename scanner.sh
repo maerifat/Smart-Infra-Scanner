@@ -112,7 +112,7 @@ createRouteToInternetGW () {
     aws ec2 create-route \
     --route-table-id $routeTableId \
     --destination-cidr-block 0.0.0.0/0 \
-    --gateway-id $internetGWId $ad
+    --gateway-id $internetGWId $ad > /dev/null
     echo "Created route for $routeTableId ($routeTableName) to $internetGWId ($internetGWName)."
 }
 
@@ -130,24 +130,25 @@ associatePubSubnetWithRouteTable (){
 createSecurityGroup () {
     
     ## Create a security group
-    aws ec2 create-security-group \
+    securityGroupId=$(aws ec2 create-security-group \
     --vpc-id $newVPCId \
     --group-name $securityGroupName \
-    --description 'Appsec-Scanner VPC - non default security group' $ad
+    --description 'Appsec-Scanner VPC - non default security group' $ad)
+    echo "New security group $securityGroupId ($securityGroupName) as been created."
     
     
     ##Getting security group id
-    securityGroupId=$(aws ec2 describe-security-groups \
-    --filters "Name=vpc-id,Values=$newVPCId" \
-    --query 'SecurityGroups[?GroupName == `Appsec-Scanner-SecurityGroup-abc`].GroupId' \
-    --output text $ad)
+    # securityGroupId=$(aws ec2 describe-security-groups $ad \
+    # --filters "Name=vpc-id,Values=$newVPCId" \
+    # --output json|  jq '.SecurityGroups'|jq '.[] | select(.GroupName == "'$securityGroupName'")'|jq '.GroupId'| tr -d '"') 
     
-    echo "Created security group"
+    # echo "Created security group"
     
     ##Tagging security group
     aws ec2 create-tags \
     --resources $securityGroupId \
     --tags "Key=Name,Value=$securityGroupName" $ad
+    echo "Tagged $securityGroupId with Name as $securityGroupName"
     
     
 }
@@ -160,7 +161,7 @@ createIngressRules () {
     ## Create security group ingress rules
     aws ec2 authorize-security-group-ingress \
     --group-id $securityGroupId \
-    --ip-permissions '[{"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "IpRanges": [{"CidrIp": "$myIp/32", "Description": "Allow SSH"}]}]' $ad
+    --protocol tcp --port 22 --cidr "$myIp/32"  $ad > /dev/null 
     echo "Allowing SSH on port 22 for $securityGroupId ($securityGroupName)."
 }
 
