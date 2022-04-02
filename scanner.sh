@@ -9,7 +9,9 @@ routeTableName="Appsec-Scanner-RouteTable-$randomID"
 securityGroupName="Appsec-Scanner-SecurityGroup-$randomID"
 instanceName="Appsec-Scanner-Ec2-Instance-$randomID"
 snapshotName="Appsec-Scanner-Ec2-Snapshot-$randomID-${RANDOM}"
+newVolumeName="Appsec-Scanner-New-Volume-$randomID-${RANDOM}"
 terminatedState="terminated"
+completedState="completed"
 tempRegion="ap-south-1"
 
 profile="--profile maerifat"
@@ -231,6 +233,50 @@ createSnapshot () {
 }
 
 
+getSnapshotState () {
+    snapshotState=$(aws ec2 describe-snapshots --snapshot-id $snapshotId  $profile --output text \
+    --query 'Snapshots[].State')
+
+}
+
+waitForSnapshotCompletion () {
+    if [[ "$snapshotState" != "$completedState" ]];then 
+        echo "Ec2 Instance $snapshotId in still in $snapshotState state. Please wait while snapshot is created."
+        sleep 10
+        getSnapshotState
+        waitForSnapshotCompletion 
+    else
+        echo "Snapshot $snapshotId ($snapshotName) has now been created."
+    fi
+
+}
+
+
+
+
+createVolume () {
+    newVolumeId=$(aws ec2 create-volume $profile \
+    --volume-type io1 \
+    --iops 1000 \
+    --snapshot-id $snapshotId \
+    --availability-zone ap-south-1a --output text --query 'VolumeId')
+
+    echo "Created new volume $newVolumeId from $snapshotId"
+
+    aws ec2 create-tags --resources $newVolumeId --tags "Key=Name,Value=$newVolumeName" $profile > /dev/null
+    echo "Tagged $newVolumeId with Name as $newVolumeName"
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -257,10 +303,10 @@ getInstanceState () {
 
 waitForInstanceTermination () {
     if [[ "$instanceState" != "$terminatedState" ]];then 
-        echo "Ec2 Instance $instanceId in still in $instanceState state. Please wait until the Ec2 instance is terminated."
-        sleep 1
+        echo "Ec2 Instance $instanceId in still in $instanceState state. Please wait while Ec2 instance is terminated."
+        sleep 10
         getInstanceState
-        waitForInstanceTermination
+        waitForInstanceTermination 
     else
         echo "Ec2 Instance $instanceId ($instanceName) has now been terminated."
     fi
@@ -325,7 +371,7 @@ deleteVPC () {
 
 prepare () {
     echo ""
-    echo "########## STAGE [1/4] - PREPARING PLAYGROUND ##########"
+    echo "########## STAGE [1/5] - PREPARING PLAYGROUND ##########"
     echo ""
     getExistingVPCIps
     findCidr
@@ -340,7 +386,7 @@ prepare () {
     associatePubSubnetWithRouteTable
     createSecurityGroup
     createIngressRules
-    runInstance
+    
     
     
 }
@@ -348,15 +394,19 @@ prepare () {
 
 build () {
     echo ""
-    echo "########## STAGE [2/4] - BUILDING INFRASTRUCTURE ##########"
+    echo "########## STAGE [2/5] - BUILDING INFRASTRUCTURE ##########"
+    echo ""
+    runInstance
     getVolumeIds
     createSnapshot
+    getSnapshotState
+    waitForSnapshotCompletion
+    createVolume
 
 
-    deleteSnapshot
-    echo ""
+
+
 }
-
 
 
 scan () {
@@ -367,15 +417,28 @@ scan () {
 
 
 
-
-clean () {
+destroy () {
     echo ""
-    echo "########## STAGE [4/4] - CLEANING ##########"
+    echo "########## STAGE [4/5] - DESTROYING INFRASTRUCTURE ##########"
     echo ""
-
+    deleteSnapshot
     terminateInstance
     getInstanceState
     waitForInstanceTermination
+}
+
+
+
+
+
+
+
+clean () {
+    echo ""
+    echo "########## STAGE [5/5] - CLEANING ##########"
+    echo ""
+
+
     deleteSecurityGroup
     disassociatePubSubnetFromRouteTable
     deleteRouteTable
@@ -387,4 +450,4 @@ clean () {
     
 }
 
-prepare && build && scan && clean
+prepare && build && scan && sleep 60 && destroy && clean
