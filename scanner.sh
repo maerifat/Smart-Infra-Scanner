@@ -8,6 +8,7 @@ internetGWName="Appsec-Scanner-InternetGW-$randomID"
 routeTableName="Appsec-Scanner-RouteTable-$randomID"
 securityGroupName="Appsec-Scanner-SecurityGroup-$randomID"
 instanceName="Appsec-Scanner-Ec2-Instance-$randomID"
+snapshotName="Appsec-Scanner-Ec2-Snapshot-$randomID-${RANDOM}"
 terminatedState="terminated"
 tempRegion="ap-south-1"
 
@@ -186,7 +187,7 @@ runInstance () {
 
     instanceId=$(aws ec2 run-instances $profile\
     --image-id ami-04893cdb768d0f9ee \
-    --instance-type t2.micro \
+   --instance-type t2.micro \
     --subnet-id $pubSubnetId \
     --security-group-ids $securityGroupId \
     --associate-public-ip-address \
@@ -219,9 +220,24 @@ echo ${volumeIdsArray[*]}
 }
 
 
+createSnapshot () {
+    snapshotId=$(aws ec2 create-snapshot $profile --volume-id ${volumeIdsArray[0]}  \
+    --description "This snapshot has been created by appsec scanner." --query 'SnapshotId' --output text)
+     echo "Created snapshot $snapshotId of volume ${volumeIdsArray[0]} "
+     
+    aws ec2 create-tags --resources $snapshotId --tags "Key=Name,Value=$snapshotName" $profile > /dev/null
+    echo "Tagged $snapshotId with Name as $snapshotName"
+   
+}
 
 
 
+
+
+deleteSnapshot () {
+    aws ec2 delete-snapshot $profile --snapshot-id $snapshotId 
+    echo "Delete snapshot $snapshotId ($snapshotName)"
+}
 ##CLEANSING START
 ####
 ####
@@ -242,6 +258,7 @@ getInstanceState () {
 waitForInstanceTermination () {
     if [[ "$instanceState" != "$terminatedState" ]];then 
         echo "Ec2 Instance $instanceId in still in $instanceState state. Please wait until the Ec2 instance is terminated."
+        sleep 1
         getInstanceState
         waitForInstanceTermination
     else
@@ -333,7 +350,10 @@ build () {
     echo ""
     echo "########## STAGE [2/4] - BUILDING INFRASTRUCTURE ##########"
     getVolumeIds
+    createSnapshot
 
+
+    deleteSnapshot
     echo ""
 }
 
