@@ -265,12 +265,21 @@ createVolume () {
 
     aws ec2 create-tags --resources $newVolumeId --tags "Key=Name,Value=$newVolumeName" $profile > /dev/null
     echo "Tagged $newVolumeId with Name as $newVolumeName"
+    sleep 60
 }
 
 
 
 
+attachVolume (){
+    aws ec2 attach-volume $profile\
+    --device /dev/sdf \
+    --instance-id $instanceId \
+    --volume-id $newVolumeId
 
+    
+    echo "New Volume $newVolumeId has been attached to $instanceId"
+}
 
 
 
@@ -283,6 +292,12 @@ createVolume () {
 deleteSnapshot () {
     aws ec2 delete-snapshot $profile --snapshot-id $snapshotId 
     echo "Delete snapshot $snapshotId ($snapshotName)"
+}
+
+
+deleteVolume () {
+    aws ec2 delete-volume --volume-id $newVolumeId $profile > /dev/null
+    echo "Deleted new volume $newVolumeId ($newVolumeName)"
 }
 ##CLEANSING START
 ####
@@ -402,6 +417,7 @@ build () {
     getSnapshotState
     waitForSnapshotCompletion
     createVolume
+    attachVolume
 
 
 
@@ -425,6 +441,7 @@ destroy () {
     terminateInstance
     getInstanceState
     waitForInstanceTermination
+    deleteVolume
 }
 
 
