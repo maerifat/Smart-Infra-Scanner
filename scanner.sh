@@ -1,7 +1,5 @@
 #!/bin/bash
 
-
-
 randomID="abc"
 keyName="Appsec-Scanner-Key-Pair-$randomID"
 vpcName="Appsec-Scanner-VPC-$randomID"
@@ -9,13 +7,28 @@ subnetName="Appsec-Scanner-Pub-Subnet-$randomID"
 internetGWName="Appsec-Scanner-InternetGW-$randomID"
 routeTableName="Appsec-Scanner-RouteTable-$randomID"
 securityGroupName="Appsec-Scanner-SecurityGroup-$randomID"
+instanceName="Appsec-Scanner-Ec2-Instance-$randomID"
+terminatedState="terminated"
+tempRegion="ap-south-1"
 
-ad="--profile maerifat"
+profile="--profile maerifat"
 
+
+getReglionList ()
+{
+    regionList=($(aws ec2 describe-regions $profile --output text --query 'Regions[].RegionName[]'))
+}
 
 getExistingVPCs () {
-    VPSC=$(aws ec2 describe-vpcs $ad --query 'Vpcs[*].CidrBlockAssociationSet[*].CidrBlock' --output text |cut -d "/" -f1|sort -u)
-    VPCSarray=("$VPSC")
+
+    for tempRegion in ${regionList[*]}; do 
+    aws ec2 describe-vpcs $profile --output text --query 'Vpcs[].VpcId'
+    done
+}
+
+getExistingVPCIps () {
+    VPCS=$(aws ec2 describe-vpcs $profile --query 'Vpcs[*].CidrBlockAssociationSet[*].CidrBlock' --output text |cut -d "/" -f1|sort -u)
+    VPCSarray=("$VPCS")
 }
 
 #generate all new possible cidr for availibility
@@ -34,7 +47,7 @@ findCidr () {
 
 #generate key-pair
 generateKey () {
-    aws ec2 create-key-pair --key-name $keyName  --query 'KeyMaterial' --output text $ad > /tmp/$keyName.pem
+    aws ec2 create-key-pair --key-name $keyName  --query 'KeyMaterial' --output text $profile > /tmp/$keyName.pem
     echo "New SSH key has been created and saved as /tmp/$keyName.pem"
 }
 
@@ -50,15 +63,15 @@ findMyIp (){
 
 
 createVPC () {
-    newVPCId=$(aws ec2 create-vpc --cidr-block "${availableVPCCIDR}/16" --query 'Vpc.VpcId' --output text $ad)
+    newVPCId=$(aws ec2 create-vpc --cidr-block "${availableVPCCIDR}/16" --query 'Vpc.VpcId' --output text $profile)
     echo "New VPC $newVPCId  has been created."
     
     #adding tag
-    aws ec2 create-tags --resources "${newVPCId}" --tags "Key=Name,Value=$vpcName" $ad
+    aws ec2 create-tags --resources "${newVPCId}" --tags "Key=Name,Value=$vpcName" $profile
     echo "Tagged $newVPCId with Name as $vpcName"
     
     #enabling dns hostnames
-    aws ec2 modify-vpc-attribute --vpc-id "$newVPCId" --enable-dns-hostnames "{\"Value\":true}" $ad
+    aws ec2 modify-vpc-attribute --vpc-id "$newVPCId" --enable-dns-hostnames "{\"Value\":true}" $profile
     echo "Enabled dns host names for $newVPCId ($vpcName)"
     
 }
@@ -66,24 +79,24 @@ createVPC () {
 createSubnet () {
     subnetCIDR=$(echo "$availableVPCCIDR"| awk -F "." '{$3=1; print $1 "." $2 "." $3 "." $4}')
     pubSubnetId=$(aws ec2 create-subnet --vpc-id $newVPCId --cidr-block $subnetCIDR/24 \
-    --availability-zone ap-south-1a --query 'Subnet.SubnetId' --output text $ad)
+    --availability-zone ap-south-1a --query 'Subnet.SubnetId' --output text $profile)
     echo "New subnet $subnetCIDR/24 ($pubSubnetId) has been created."
     
     #adding tag
-    aws ec2 create-tags --resources $pubSubnetId --tags "Key=Name,Value=$subnetName" $ad
+    aws ec2 create-tags --resources $pubSubnetId --tags "Key=Name,Value=$subnetName" $profile
     echo "Tagged $pubSubnetId with Name as $subnetName"
     
     #enabling auto assign public Ip
-    aws ec2 modify-subnet-attribute --subnet-id $pubSubnetId --map-public-ip-on-launch $ad
+    aws ec2 modify-subnet-attribute --subnet-id $pubSubnetId --map-public-ip-on-launch $profile
     echo "Enabled auto assignment of public Ip to $pubSubnetId ($subnetName)"
 }
 
 
 createInternetGW () {
-    internetGWId=$(aws ec2 create-internet-gateway --query 'InternetGateway.InternetGatewayId' --output text $ad)
+    internetGWId=$(aws ec2 create-internet-gateway --query 'InternetGateway.InternetGatewayId' --output text $profile)
     echo "Internet Gateway $internetGWId created."
     
-    aws ec2 create-tags --resources $internetGWId --tags "Key=Name,Value=myvpc-internet-gateway" $ad
+    aws ec2 create-tags --resources $internetGWId --tags "Key=Name,Value=myvpc-internet-gateway" $profile
     echo "Tagged $internetGWId with Name as $internetGWName"
     
 }
@@ -91,18 +104,18 @@ createInternetGW () {
 
 
 attachInternetGW () {
-    aws ec2 attach-internet-gateway --vpc-id $newVPCId --internet-gateway-id $internetGWId $ad
-    echo "Attached Internet Gateway ($internetGWId) to VPC ($newVPCId)"
+    aws ec2 attach-internet-gateway --vpc-id $newVPCId --internet-gateway-id $internetGWId $profile
+    echo "Attached Internet Gateway $internetGWId to VPC $newVPCId"
     
 }
 
 
 createRouteTable () {
-    routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $ad)
+    routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $profile)
     echo "New route table $routeTableId has been created."
     
     #Adding tag
-    aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $ad
+    aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile
     echo "Tagged $routeTableId with Name as $routeTableName"
 }
 
@@ -112,7 +125,7 @@ createRouteToInternetGW () {
     aws ec2 create-route \
     --route-table-id $routeTableId \
     --destination-cidr-block 0.0.0.0/0 \
-    --gateway-id $internetGWId $ad > /dev/null
+    --gateway-id $internetGWId $profile > /dev/null
     echo "Created route for $routeTableId ($routeTableName) to $internetGWId ($internetGWName)."
 }
 
@@ -122,8 +135,8 @@ associatePubSubnetWithRouteTable (){
     --subnet-id $pubSubnetId \
     --route-table-id $routeTableId \
     --query 'AssociationId'\
-    --output text $ad)
-    echo "Associated ($routeTableAssociationId) route table ($routeTableId) with the subnet ($pubSubnetId)."
+    --output text $profile)
+    echo "Associated ($routeTableAssociationId) route table $routeTableId with the subnet $pubSubnetId."
 }
 
 
@@ -133,12 +146,12 @@ createSecurityGroup () {
     securityGroupId=$(aws ec2 create-security-group \
     --vpc-id $newVPCId \
     --group-name $securityGroupName \
-    --description 'Appsec-Scanner VPC - non default security group' $ad)
+    --description 'Appsec-Scanner VPC - non default security group' $profile)
     echo "New security group $securityGroupId ($securityGroupName) as been created."
     
     
     ##Getting security group id
-    # securityGroupId=$(aws ec2 describe-security-groups $ad \
+    # securityGroupId=$(aws ec2 describe-security-groups $profile \
     # --filters "Name=vpc-id,Values=$newVPCId" \
     # --output json|  jq '.SecurityGroups'|jq '.[] | select(.GroupName == "'$securityGroupName'")'|jq '.GroupId'| tr -d '"') 
     
@@ -147,22 +160,19 @@ createSecurityGroup () {
     ##Tagging security group
     aws ec2 create-tags \
     --resources $securityGroupId \
-    --tags "Key=Name,Value=$securityGroupName" $ad
+    --tags "Key=Name,Value=$securityGroupName" $profile
     echo "Tagged $securityGroupId with Name as $securityGroupName"
     
     
 }
 
 
-
-
-
 createIngressRules () {
     ## Create security group ingress rules
     aws ec2 authorize-security-group-ingress \
     --group-id $securityGroupId \
-    --protocol tcp --port 22 --cidr "$myIp/32"  $ad > /dev/null 
-    echo "Allowing SSH on port 22 for $securityGroupId ($securityGroupName)."
+    --protocol tcp --port 22 --cidr "$myIp/32"  $profile > /dev/null 
+    echo "Allowing SSH from $myIp on port 22 for $securityGroupId ($securityGroupName)."
 }
 
 ##BUILDING END
@@ -174,7 +184,7 @@ createIngressRules () {
 
 runInstance () {
 
-    intanceId=$(aws ec2 run-instances $ad\
+    instanceId=$(aws ec2 run-instances $profile\
     --image-id ami-04893cdb768d0f9ee \
     --instance-type t2.micro \
     --subnet-id $pubSubnetId \
@@ -183,10 +193,30 @@ runInstance () {
     --key-name $keyName \
     --output text --query 'Instances[0].InstanceId')
 
-    echo "Ec2 Instance $intanceId has been started."
+    echo "Ec2 Instance $instanceId has been started."
+
+    aws ec2 create-tags --resources $instanceId --tags "Key=Name,Value=$instanceName" $profile > /dev/null
 }
 
 
+##BUILDING INFRASTRUCTURE
+####
+####
+
+
+
+
+
+
+#for tempRegion in  ${regionList[*]};do  \
+
+getVolumeIds () {
+volumeIdsArray=($(aws ec2 describe-volumes $profile --region $tempRegion  \
+--output text --query 'Volumes[].Attachments[].VolumeId' --output text))
+
+echo "Collected VolumeIds on region $tempRegion"
+echo ${volumeIdsArray[*]}
+}
 
 
 
@@ -197,58 +227,76 @@ runInstance () {
 ####
 
 terminateInstance () {
-    aws ec2 terminate-instances --instance-ids $intanceId $ad
-    echo "Delete VPC $intanceId"
+    aws ec2 terminate-instances --instance-ids $instanceId $profile > /dev/null
+    echo "Initiated termination of Ec2 instance $instanceId ($instanceName)."
 }
+
+
+
+getInstanceState () {
+    instanceState=$(aws ec2 describe-instances  $profile --output json \
+    --query 'Reservations[].Instances[]'| jq '.[]| select(.InstanceId == "'$instanceId'")'| jq '.State.Name'|tr -d '"')
+
+}
+
+waitForInstanceTermination () {
+    if [[ "$instanceState" != "$terminatedState" ]];then 
+        echo "Ec2 Instance $instanceId in still in $instanceState state. Please wait until the Ec2 instance is terminated."
+        getInstanceState
+        waitForInstanceTermination
+    else
+        echo "Ec2 Instance $instanceId ($instanceName) has now been terminated."
+    fi
+
+}
+
 
 deleteSecurityGroup () {
     ## Delete custom security group
-    aws ec2 delete-security-group --group-id $securityGroupId $ad
+    aws ec2 delete-security-group --group-id $securityGroupId $profile
     echo "Deleted security group $securityGroupId ($securityGroupName)"
 }
 
 
 detachInternetGW (){
-    aws ec2 detach-internet-gateway --internet-gateway-id $internetGWId  --vpc-id $newVPCId $ad
-    echo "Detached Internet Gateway ($internetGWId) from VPC ($newVPCId)"
+    aws ec2 detach-internet-gateway --internet-gateway-id $internetGWId  --vpc-id $newVPCId $profile
+    echo "Detached Internet Gateway $internetGWId from VPC $newVPCId"
 }
 
 
 deleteInternetGW () {
-    aws ec2 delete-internet-gateway --internet-gateway-id $internetGWId $ad
-    echo "Deleted Internet Gateway $internetGWId"
+    aws ec2 delete-internet-gateway --internet-gateway-id $internetGWId $profile
+    echo "Deleted Internet Gateway $internetGWId ($internetGWName)"
 }
 
 
 
 disassociatePubSubnetFromRouteTable () {
-    aws ec2 disassociate-route-table --association-id $routeTableAssociationId $ad
+    aws ec2 disassociate-route-table --association-id $routeTableAssociationId $profile
     echo "Disassociated route table ($routeTableId) from the subnet ($pubSubnetId)."
 }
 
 
 
 deleteRouteTable () {
-    aws ec2 delete-route-table --route-table-id $routeTableId $ad
+    aws ec2 delete-route-table --route-table-id $routeTableId $profile
     echo "Deleted route table $routeTableId ($routeTableName)"
 }
 
 
-
-
 deleteSubnet () {
-    aws ec2 delete-subnet --subnet-id "$pubSubnetId" $ad
+    aws ec2 delete-subnet --subnet-id "$pubSubnetId" $profile
     echo "Subnet $subnetCIDR/24 ($pubSubnetId) has been deleted."
 }
 
 deleteKey () {
-    aws ec2 delete-key-pair --key-name $keyName $ad --output json
+    aws ec2 delete-key-pair --key-name $keyName $profile --output json
     rm -f /tmp/$keyName.pem
     echo "SSH key has been deleted and /tmp/$keyName.pem has been removed."
 }
 
 deleteVPC () {
-    aws ec2 delete-vpc --vpc-id "$newVPCId" $ad
+    aws ec2 delete-vpc --vpc-id "$newVPCId" $profile
     echo "VPC $newVPCId ($vpcName) has been deleted."
     echo "Scan Completed, Your system is infected."|espeak -p 50 -s 130
 }
@@ -256,11 +304,13 @@ deleteVPC () {
 
 
 
-build () {
+
+
+prepare () {
     echo ""
-    echo "########## STAGE [1/3] - BUILDING ##########"
+    echo "########## STAGE [1/4] - PREPARING PLAYGROUND ##########"
     echo ""
-    getExistingVPCs
+    getExistingVPCIps
     findCidr
     generateKey
     findMyIp
@@ -279,11 +329,19 @@ build () {
 }
 
 
+build () {
+    echo ""
+    echo "########## STAGE [2/4] - BUILDING INFRASTRUCTURE ##########"
+    getVolumeIds
+
+    echo ""
+}
+
 
 
 scan () {
     echo ""
-    echo "########## STAGE [2/3] - SCANNING ##########"
+    echo "########## STAGE [3/4] - SCANNING ##########"
     echo ""
 }
 
@@ -292,10 +350,12 @@ scan () {
 
 clean () {
     echo ""
-    echo "########## STAGE [3/3] - CLEANING ##########"
+    echo "########## STAGE [4/4] - CLEANING ##########"
     echo ""
+
     terminateInstance
-    sleep 20
+    getInstanceState
+    waitForInstanceTermination
     deleteSecurityGroup
     disassociatePubSubnetFromRouteTable
     deleteRouteTable
@@ -307,4 +367,4 @@ clean () {
     
 }
 
-build && scan && clean
+prepare && build && scan && clean
