@@ -8,15 +8,16 @@ subnetName="Appsec-Scanner-Pub-Subnet-$randomID"
 internetGWName="Appsec-Scanner-InternetGW-$randomID"
 routeTableName="Appsec-Scanner-RouteTable-$randomID"
 securityGroupName="Appsec-Scanner-SecurityGroup-$randomID"
-instanceName="Appsec-Scanner-Ec2-Instance-$randomID"
-snapshotName="Appsec-Scanner-Ec2-Snapshot-$randomID-${RANDOM}"
-newVolumeName="Appsec-Scanner-New-Volume-$randomID-${RANDOM}"
+scannerInstanceName="Appsec-Scanner-Ec2-Instance-$randomID"
+snapshotName="Appsec-Scanner-Ec2-Snapshot-$randomID"
+clonedVolumeName="Appsec-Scanner-Cloned-Volume-$randomID"
 terminatedState="terminated"
 completedState="completed"
+attachedState="attached"
 tempRegion="ap-south-1"
 username="ec2-user"
-
-profile="--profile maerifat"
+profileName="maerifat"
+profile="--profile $profileName"
 
 
 getReglionList () {
@@ -200,7 +201,7 @@ createIngressRules () {
 
 runInstance () {
 
-    instanceId=$(aws ec2 run-instances $profile\
+    scannerInstanceId=$(aws ec2 run-instances $profile\
     --image-id ami-04893cdb768d0f9ee \
    --instance-type t2.micro \
     --subnet-id $pubSubnetId \
@@ -209,9 +210,9 @@ runInstance () {
     --key-name $keyName \
     --output text --query 'Instances[0].InstanceId')
 
-    echo "Ec2 Instance $instanceId has been started."
+    echo "Ec2 Instance $scannerInstanceId has been started."
 
-    aws ec2 create-tags --resources $instanceId --tags "Key=Name,Value=$instanceName" $profile > /dev/null
+    aws ec2 create-tags --resources $scannerInstanceId --tags "Key=Name,Value=$scannerInstanceName" $profile > /dev/null
 }
 
 
@@ -254,8 +255,8 @@ getSnapshotState () {
 
 waitForSnapshotCompletion () {
     if [[ "$snapshotState" != "$completedState" ]];then 
-        echo "Ec2 Instance $snapshotId in still in $snapshotState state. Please wait while snapshot is created."
-        sleep 10
+        echo "Snapshot $snapshotId in still in $snapshotState state. Please wait while snapshot is created."
+        sleep 20
         getSnapshotState
         waitForSnapshotCompletion 
     else
@@ -268,17 +269,17 @@ waitForSnapshotCompletion () {
 
 
 createVolume () {
-    newVolumeId=$(aws ec2 create-volume $profile \
+    clonedVolumeId=$(aws ec2 create-volume $profile \
     --volume-type io1 \
     --iops 1000 \
     --snapshot-id $snapshotId \
     --availability-zone ap-south-1a --output text --query 'VolumeId')
 
-    echo "Created new volume $newVolumeId from $snapshotId"
+    echo "Created new volume $clonedVolumeId from $snapshotId"
 
-    aws ec2 create-tags --resources $newVolumeId --tags "Key=Name,Value=$newVolumeName" $profile > /dev/null
-    echo "Tagged $newVolumeId with Name as $newVolumeName"
-    sleep 60
+    aws ec2 create-tags --resources $clonedVolumeId --tags "Key=Name,Value=$clonedVolumeName" $profile > /dev/null
+    echo "Tagged $clonedVolumeId with Name as $clonedVolumeName"
+    
 }
 
 
@@ -287,18 +288,39 @@ createVolume () {
 attachVolume (){
     aws ec2 attach-volume $profile\
     --device /dev/sdf \
-    --instance-id $instanceId \
-    --volume-id $newVolumeId
+    --instance-id $scannerInstanceId \
+    --volume-id $clonedVolumeId
 
     
-    echo "New Volume $newVolumeId has been attached to $instanceId"
+    echo "Initiated attachment of $clonedVolumeId with $scannerInstanceId"
 }
 
 
+getClonedVolumeState () {
+    clonedVolumeState=$(aws ec2 describe-volumes --volume-id $clonedVolumeId $profile \
+     --output text  --query 'Volumes[].Attachments[].State')
+
+}
+
+
+waitForClonedVolumeAttachment () {
+    if [[ "$clonedVolumeState" != "$attachedState" ]];then 
+        echo "Cloned Volume $clonedVolumeId in still in $clonedVolumeState state. Please wait while volume is attached to instance"
+        sleep 5
+        getClonedVolumeState
+        waitForClonedVolumeAttachment
+    else
+        echo "Volume $clonedVolumeId ($clonedVolumeName) has now been attached to $scannerInstanceId."
+    fi
+
+}
+
+
+
 fetchInstanceIp (){
-    instanceIpAddress=$(aws ec2 describe-instances --instance-id  $instanceId $profile\
+    instanceIpAddress=$(aws ec2 describe-instances --instance-id  $scannerInstanceId $profile\
     --output text  --query 'Reservations[].Instances[].PublicIpAddress')
-    echo "Public Ip address of $instanceId is $instanceIpAddress"
+    echo "Public Ip address of $scannerInstanceId is $instanceIpAddress"
 }
 
 
@@ -306,7 +328,14 @@ sshInstance () {
 
     echo "Initiated ssh connection"
     chmod 600 $keyLocation
-    ssh -i $keyLocation -o StrictHostKeyChecking=no $username@$instanceIpAddress "id; exit;"
+
+    echo "Try manual connection: ssh -i $keyLocation -o StrictHostKeyChecking=no $username@$instanceIpAddress"
+
+    sshCommands="lsblk;pwd;whoami;"
+
+    ssh -i $keyLocation -o StrictHostKeyChecking=no $username@$instanceIpAddress "$sshCommands"
+
+    
     
 }
 
@@ -321,34 +350,34 @@ deleteSnapshot () {
 
 
 deleteVolume () {
-    aws ec2 delete-volume --volume-id $newVolumeId $profile > /dev/null
-    echo "Deleted new volume $newVolumeId ($newVolumeName)"
+    aws ec2 delete-volume --volume-id $clonedVolumeId $profile > /dev/null
+    echo "Deleted new volume $clonedVolumeId ($clonedVolumeName)"
 }
 ##CLEANSING START
 ####
 ####
 
 terminateInstance () {
-    aws ec2 terminate-instances --instance-ids $instanceId $profile > /dev/null
-    echo "Initiated termination of Ec2 instance $instanceId ($instanceName)."
+    aws ec2 terminate-instances --instance-ids $scannerInstanceId $profile > /dev/null
+    echo "Initiated termination of Ec2 instance $scannerInstanceId ($scannerInstanceName)."
 }
 
 
 
 getInstanceState () {
     instanceState=$(aws ec2 describe-instances  $profile --output json \
-    --query 'Reservations[].Instances[]'| jq '.[]| select(.InstanceId == "'$instanceId'")'| jq '.State.Name'|tr -d '"')
+    --query 'Reservations[].Instances[]'| jq '.[]| select(.InstanceId == "'$scannerInstanceId'")'| jq '.State.Name'|tr -d '"')
 
 }
 
 waitForInstanceTermination () {
     if [[ "$instanceState" != "$terminatedState" ]];then 
-        echo "Ec2 Instance $instanceId in still in $instanceState state. Please wait while Ec2 instance is terminated."
-        sleep 10
+        echo "Ec2 Instance $scannerInstanceId in still in $instanceState state. Please wait while Ec2 instance is terminated."
+        sleep 15
         getInstanceState
         waitForInstanceTermination 
     else
-        echo "Ec2 Instance $instanceId ($instanceName) has now been terminated."
+        echo "Ec2 Instance $scannerInstanceId ($scannerInstanceName) has now been terminated."
     fi
 
 }
@@ -402,13 +431,67 @@ deleteVPC () {
     aws ec2 delete-vpc --vpc-id "$newVPCId" $profile
     echo "VPC $newVPCId ($vpcName) has been deleted."
     echo "Scan Completed, Your system is infected."|espeak -p 50 -s 130
+    echo ""
+}
+
+
+
+getBadInstances () {
+    
+    badInstancesArray=($(aws ec2 describe-instances $profile --output text --filters Name=tag:Name,Values=$scannerInstanceName \
+    --query 'Reservations[].Instances[].InstanceId'))
+
+    echo ""
+}
+
+
+
+terminateBadInstances () {
+
+    for badInstance in ${badInstancesArray[*]};do
+
+    aws ec2 terminate-instances --instance-ids $badInstance $profile 
+    done
+}
+
+
+
+getBadInstancesStates () {
+
+    badInstancesState=$(aws ec2 describe-instances $profile --output text --filters Name=tag:Name,Values=$scannerInstanceName \
+    --query 'Reservations[].Instances[].State.Name'|xargs| tr " " "\n"|sort -u)
 }
 
 
 
 
+waitForBadInstancesTermination () {
+    if [[ "$badInstancesState" != "$terminatedState" ]];then 
+        echo "Bad instances are yet to be terminated. Please Wait."
+        sleep 1
+        getBadInstancesStates
+        waitForBadInstancesTermination
+    else
+        echo "Bad instances have been terminated."
+    fi
+}
 
 
+getBadVPCs () {
+    badVPCsArray=($(aws ec2 describe-vpcs $profile --output text --filters Name=tag:Name,Values=Appsec-Scanner-VPC-abc \
+    --query 'Vpcs[].VpcId'))
+}
+
+deleteBadVPCS () {
+    for badVPC in badVPCsArray; do
+     aws ec2 delete-vpc --vpc-id "$badVPC" $profile
+     done
+}
+
+
+
+
+###Fin
 prepare () {
     echo ""
     echo "########## STAGE [1/5] - PREPARING PLAYGROUND ##########"
@@ -422,7 +505,7 @@ prepare () {
     createSubnet
     createInternetGW
     attachInternetGW
-   getRouteTable
+    getRouteTable
     createRouteToInternetGW
     associatePubSubnetWithRouteTable
     createSecurityGroup
@@ -444,6 +527,8 @@ build () {
     waitForSnapshotCompletion
     createVolume
     attachVolume
+    getClonedVolumeState
+    waitForClonedVolumeAttachment
     fetchInstanceIp
 
 
@@ -494,4 +579,8 @@ clean () {
     
 }
 
-prepare && build && scan && sleep 60 && destroy && clean
+
+
+
+prepare && build && scan
+# && sleep 1 && destroy && clean
