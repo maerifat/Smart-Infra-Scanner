@@ -2,6 +2,7 @@
 
 randomID="abc"
 keyName="Appsec-Scanner-Key-Pair-$randomID"
+keyLocation="/tmp/$keyName.pem"
 vpcName="Appsec-Scanner-VPC-$randomID"
 subnetName="Appsec-Scanner-Pub-Subnet-$randomID"
 internetGWName="Appsec-Scanner-InternetGW-$randomID"
@@ -13,12 +14,12 @@ newVolumeName="Appsec-Scanner-New-Volume-$randomID-${RANDOM}"
 terminatedState="terminated"
 completedState="completed"
 tempRegion="ap-south-1"
+username="ec2-user"
 
 profile="--profile maerifat"
 
 
-getReglionList ()
-{
+getReglionList () {
     regionList=($(aws ec2 describe-regions $profile --output text --query 'Regions[].RegionName[]'))
 }
 
@@ -79,6 +80,18 @@ createVPC () {
     
 }
 
+
+getRouteTable () {
+    routeTableId=$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$newVPCId --output text $profile\
+    --query 'RouteTables[].Associations[?Main==`true`][].RouteTableId')
+
+    echo "Route Table of $newVPCId is $routeTableId"
+        #Adding tag
+    aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile
+    echo "Tagged $routeTableId with Name as $routeTableName"
+}
+
+
 createSubnet () {
     subnetCIDR=$(echo "$availableVPCCIDR"| awk -F "." '{$3=1; print $1 "." $2 "." $3 "." $4}')
     pubSubnetId=$(aws ec2 create-subnet --vpc-id $newVPCId --cidr-block $subnetCIDR/24 \
@@ -99,7 +112,7 @@ createInternetGW () {
     internetGWId=$(aws ec2 create-internet-gateway --query 'InternetGateway.InternetGatewayId' --output text $profile)
     echo "Internet Gateway $internetGWId created."
     
-    aws ec2 create-tags --resources $internetGWId --tags "Key=Name,Value=myvpc-internet-gateway" $profile
+    aws ec2 create-tags --resources $internetGWId --tags "Key=Name,Value=$internetGWName" $profile
     echo "Tagged $internetGWId with Name as $internetGWName"
     
 }
@@ -113,14 +126,14 @@ attachInternetGW () {
 }
 
 
-createRouteTable () {
-    routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $profile)
-    echo "New route table $routeTableId has been created."
+# createRouteTable () {
+#     routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $profile)
+#     echo "New route table $routeTableId has been created."
     
-    #Adding tag
-    aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile
-    echo "Tagged $routeTableId with Name as $routeTableName"
-}
+#     #Adding tag
+#     aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile
+#     echo "Tagged $routeTableId with Name as $routeTableName"
+# }
 
 
 createRouteToInternetGW () {
@@ -282,8 +295,20 @@ attachVolume (){
 }
 
 
+fetchInstanceIp (){
+    instanceIpAddress=$(aws ec2 describe-instances --instance-id  $instanceId $profile\
+    --output text  --query 'Reservations[].Instances[].PublicIpAddress')
+    echo "Public Ip address of $instanceId is $instanceIpAddress"
+}
 
 
+sshInstance () {
+
+    echo "Initiated ssh connection"
+    chmod 600 $keyLocation
+    ssh -i $keyLocation -o StrictHostKeyChecking=no $username@$instanceIpAddress "id; exit;"
+    
+}
 
 
 
@@ -356,10 +381,10 @@ disassociatePubSubnetFromRouteTable () {
 
 
 
-deleteRouteTable () {
-    aws ec2 delete-route-table --route-table-id $routeTableId $profile
-    echo "Deleted route table $routeTableId ($routeTableName)"
-}
+# deleteRouteTable () {
+#     aws ec2 delete-route-table --route-table-id $routeTableId $profile
+#     echo "Deleted route table $routeTableId ($routeTableName)"
+# }
 
 
 deleteSubnet () {
@@ -388,6 +413,7 @@ prepare () {
     echo ""
     echo "########## STAGE [1/5] - PREPARING PLAYGROUND ##########"
     echo ""
+    deleteKey
     getExistingVPCIps
     findCidr
     generateKey
@@ -396,12 +422,12 @@ prepare () {
     createSubnet
     createInternetGW
     attachInternetGW
-    createRouteTable
+   getRouteTable
     createRouteToInternetGW
     associatePubSubnetWithRouteTable
     createSecurityGroup
     createIngressRules
-    
+
     
     
 }
@@ -418,6 +444,7 @@ build () {
     waitForSnapshotCompletion
     createVolume
     attachVolume
+    fetchInstanceIp
 
 
 
@@ -428,6 +455,7 @@ build () {
 scan () {
     echo ""
     echo "########## STAGE [3/4] - SCANNING ##########"
+    sshInstance
     echo ""
 }
 
@@ -458,7 +486,6 @@ clean () {
 
     deleteSecurityGroup
     disassociatePubSubnetFromRouteTable
-    deleteRouteTable
     detachInternetGW
     deleteInternetGW
     deleteSubnet
