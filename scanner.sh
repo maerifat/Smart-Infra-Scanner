@@ -441,7 +441,7 @@ getBadInstances () {
     badInstancesArray=($(aws ec2 describe-instances $profile --output text --filters Name=tag:Name,Values=$scannerInstanceName \
     --query 'Reservations[].Instances[].InstanceId'))
 
-    echo ""
+    echo "The backlog instances will be deleted: " "${badInstancesArray[*]}"
 }
 
 
@@ -451,6 +451,7 @@ terminateBadInstances () {
     for badInstance in ${badInstancesArray[*]};do
 
     aws ec2 terminate-instances --instance-ids $badInstance $profile 
+    echo "Initiated termination of backlog instances"
     done
 }
 
@@ -480,18 +481,39 @@ waitForBadInstancesTermination () {
 getBadVPCs () {
     badVPCsArray=($(aws ec2 describe-vpcs $profile --output text --filters Name=tag:Name,Values=Appsec-Scanner-VPC-abc \
     --query 'Vpcs[].VpcId'))
+    echo "These backlog VPCs will be deleted: " "${badVPCsArray[*]}"
 }
 
 deleteBadVPCS () {
-    for badVPC in badVPCsArray; do
+    for badVPC in ${badVPCsArray[*]}; do
      aws ec2 delete-vpc --vpc-id "$badVPC" $profile
+     echo "All backlog VPCs have been deleted successfully."
+
      done
 }
 
 
 
 
-###Fin
+forceClean () {
+    getBadInstances
+    terminateBadInstances
+    getBadInstancesStates
+    waitForBadInstancesTermination
+    getBadVPCs
+    deleteBadVPCS
+
+
+
+}
+
+
+
+
+
+
+
+###Final call
 prepare () {
     echo ""
     echo "########## STAGE [1/5] - PREPARING PLAYGROUND ##########"
@@ -583,4 +605,5 @@ clean () {
 
 
 prepare && build && scan
-# && sleep 1 && destroy && clean
+#sleep 1 && destroy && clean
+#forceClean
