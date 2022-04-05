@@ -18,6 +18,8 @@ tempRegion="ap-south-1"
 username="ec2-user"
 profileName="maerifat"
 profile="--profile $profileName"
+scanCmd="scan"
+forceCleanCmd="forceclean"
 
 
 getReglionList () {
@@ -436,74 +438,208 @@ deleteVPC () {
 
 
 
+
+
+#Force Clean
+
 getBadInstances () {
     
     badInstancesArray=($(aws ec2 describe-instances $profile --output text --filters Name=tag:Name,Values=$scannerInstanceName \
     --query 'Reservations[].Instances[].InstanceId'))
 
-    echo "The backlog instances will be deleted: " "${badInstancesArray[*]}"
+    if ! [ -z "${badInstancesArray[*]}" ];then 
+        echo "The backlog instances will be deleted: " "${badInstancesArray[*]}"
+    fi
+
+
 }
 
 
 
 terminateBadInstances () {
 
-    for badInstance in ${badInstancesArray[*]};do
+    if ! [ -z "${badInstancesArray[*]}" ];then 
 
-    aws ec2 terminate-instances --instance-ids $badInstance $profile 
-    echo "Initiated termination of backlog instances"
-    done
+        for badInstance in ${badInstancesArray[*]};do
+
+            aws ec2 terminate-instances --instance-ids $badInstance $profile 
+            echo "Initiated termination of backlog instances"
+        done
+
+    else
+        echo "There are no backlog instances to terminate. "
+    fi
+
 }
 
 
 
 getBadInstancesStates () {
 
-    badInstancesState=$(aws ec2 describe-instances $profile --output text --filters Name=tag:Name,Values=$scannerInstanceName \
-    --query 'Reservations[].Instances[].State.Name'|xargs| tr " " "\n"|sort -u)
+    if ! [ -z "${badInstancesArray[*]}" ];then 
+
+        badInstancesState=$(aws ec2 describe-instances $profile --output text --filters Name=tag:Name,Values=$scannerInstanceName \
+        --query 'Reservations[].Instances[].State.Name'|xargs| tr " " "\n"|sort -u)
+    fi
 }
 
 
 
 
 waitForBadInstancesTermination () {
-    if [[ "$badInstancesState" != "$terminatedState" ]];then 
-        echo "Bad instances are yet to be terminated. Please Wait."
-        sleep 1
-        getBadInstancesStates
-        waitForBadInstancesTermination
-    else
-        echo "Bad instances have been terminated."
+    if ! [ -z "${badInstancesArray[*]}" ];then 
+        if [[ "$badInstancesState" != "$terminatedState" ]];then 
+            echo "Bad instances are yet to be terminated. Please Wait."
+            sleep 1
+            getBadInstancesStates
+            waitForBadInstancesTermination
+        else
+            echo "Bad instances have been terminated."
+        fi
     fi
 }
+
+
+
+
+getBadSubnets () {
+    badSubnetsArray=($(aws ec2 describe-subnets $profile \
+    --output text --filters Name=tag:Name,Values=$subnetName --query 'Subnets[].SubnetId'))
+
+}
+
+
+
+
+deleteBadSubnets () {
+
+    if ! [ -z "${badSubnetsArray[*]}" ];then 
+
+        for badSubnet in ${badSubnetsArray[*]}; do
+            aws ec2 delete-subnet --subnet-id $badSubnet $profile
+        done
+        echo "Deleted Backlog Subnets: ${badSubnetsArray[*]}"
+
+    else
+        echo "There are no Backlog Subnets to delete"
+
+    fi
+
+}
+
+
+getBadSecurityGroups () {
+    badSecurityGroupsArray=($(aws ec2 describe-security-groups $profile \
+    --output text --filters Name=tag:Name,Values=$securityGroupName --query 'SecurityGroups[].GroupId'))
+}
+
+deleteBadSecurityGroups () {
+    if ! [ -z "${badSubnetsArray[*]}" ];then 
+
+        for badSecurityGroup in ${badSecurityGroupsArray[*]}; do
+            aws ec2 delete-security-group --group-id $badSecurityGroup $profile
+        done
+        echo "Deleted Backlog Security Groups: ${badSecurityGroupsArray[*]}"
+
+    else
+    echo "There are no Backlog Security Groups to delete"
+
+    fi
+
+}
+
+
+getBadInternetGWs () {
+    badInternetGWIdsArray=($(aws ec2 describe-internet-gateways $profile\
+    --output text --filters Name=tag:Name,Values=$internetGWName --query 'InternetGateways[].InternetGatewayId'))
+
+}
+
+
+detachBadInternetGWs () {
+    
+
+    if ! [ -z "${badInternetGWIdsArray[*]}" ];then 
+    
+        for badInternetGWId in ${badInternetGWIdsArray[*]}; do
+
+            attachedBadVPCId=$(aws ec2 describe-internet-gateways  --internet-gateway-ids $badInternetGWId $profile \
+            --output text --query 'InternetGateways[].Attachments[].VpcId')
+
+            if ! [ -z "$attachedBadVPCId" ];then 
+
+                aws ec2 detach-internet-gateway --internet-gateway-id $badInternetGWId  --vpc-id $attachedBadVPCId $profile
+                echo "Detached internet gateway $badInternetGWId from VPC $attachedBadVPCId"
+            else
+                echo "$badInternetGWId is already detached"
+            fi
+            
+        done
+
+    else
+        echo "There are no backlog internet gateways to detach."
+    fi
+
+}
+
+deletebadInternetGWs ()
+{
+    if ! [ -z "${badInternetGWIdsArray[*]}" ];then
+
+        for badInternetGWId in ${badInternetGWIdsArray[*]}; do
+            aws ec2 delete-internet-gateway --internet-gateway-id $badInternetGWId $profile
+            echo "Deleted internet gateway $badInternetGWId"
+        done
+    
+    else
+        echo "There are no backlog internet gateways to delete."
+    fi
+}
+
+
 
 
 getBadVPCs () {
     badVPCsArray=($(aws ec2 describe-vpcs $profile --output text --filters Name=tag:Name,Values=Appsec-Scanner-VPC-abc \
     --query 'Vpcs[].VpcId'))
-    echo "These backlog VPCs will be deleted: " "${badVPCsArray[*]}"
+
 }
 
 deleteBadVPCS () {
-    for badVPC in ${badVPCsArray[*]}; do
-     aws ec2 delete-vpc --vpc-id "$badVPC" $profile
-     echo "All backlog VPCs have been deleted successfully."
+    if ! [ -z "${badInternetGWIdsArray[*]}" ];then
 
-     done
+        for badVPC in ${badVPCsArray[*]}; do
+            aws ec2 delete-vpc --vpc-id "$badVPC" $profile
+            echo "Deleted backlog VPC $badVPC."
+        done
+
+    else
+
+        echo There are no backlog VPCs to delete.
+
+    fi
 }
 
 
 
 
 forceClean () {
+    echo ""
+    echo "########## FORCE CLEANING ##########"
+    echo ""
     getBadInstances
     terminateBadInstances
     getBadInstancesStates
     waitForBadInstancesTermination
+    getBadSubnets
+    deleteBadSubnets
+    getBadSecurityGroups
+    deleteBadSecurityGroups
+    getBadInternetGWs
+    detachBadInternetGWs
+    deletebadInternetGWs
     getBadVPCs
     deleteBadVPCS
-
-
 
 }
 
@@ -533,8 +669,6 @@ prepare () {
     createSecurityGroup
     createIngressRules
 
-    
-    
 }
 
 
@@ -548,6 +682,7 @@ build () {
     getSnapshotState
     waitForSnapshotCompletion
     createVolume
+    sleep 60
     attachVolume
     getClonedVolumeState
     waitForClonedVolumeAttachment
@@ -603,7 +738,21 @@ clean () {
 
 
 
+if [[ "$1" == "$scanCmd" ]];then
 
-prepare && build && scan
-#sleep 1 && destroy && clean
-#forceClean
+    prepare && build && scan
+    sleep 1 && destroy && clean
+
+elif [[ "$1" == "$forceCleanCmd" ]];then
+
+    forceClean
+
+elif  [ -z "$1" ]; then 
+
+    echo "! Arguments missing . Please use 'scan / forceclean' as arguments."
+    exit
+
+else
+     echo "Invalid Arguments provided. Please use 'scan / forceclean' as arguments."
+
+fi
