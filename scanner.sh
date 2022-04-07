@@ -14,13 +14,17 @@ clonedVolumeName="Appsec-Scanner-Cloned-Volume-$randomID"
 terminatedState="terminated"
 completedState="completed"
 attachedState="attached"
+detachedState="detached"
+inuseState="in-use"
 runningState="running"
 regionName="ap-south-1"
+scannerVPCRegionName="us-east-1"
 username="ec2-user"
 profileName="maerifat"
 profile="--profile $profileName"
 region="--region ${regionName}"
 scanCmd="scan"
+scanAllRegionsCmd="scanallregions"
 forceCleanCmd="forceclean"
 
 
@@ -267,8 +271,15 @@ createSnapshot () {
 }
 
 
+copySnapshot () {
+    aws ec2 copy-snapshot $profile --destination-region $scannerVPCRegionName \
+    --source-region $regionName --source-snapshot-id $snapshotId 
+}
 
-createAllRegionsSnapShots () {
+
+
+
+createAllRegionsInfra () {
 
     for regionName in ${regionList[*]};do
         region="--region $regionName"
@@ -282,18 +293,19 @@ createAllRegionsSnapShots () {
                 waitForSnapshotCompletion
                 createVolume
 
-                for $clonedVolumeId in ${clonedVolumeIdsArray[*]};do
+                #for clonedVolumeId in ${clonedVolumeIdsArray[*]};do
                     waitForRunningScannerInstance
                     attachVolume
                     waitForClonedVolumeAttachment
-                    
-                    scan #to create
-                    detachVolume #to create
-                    waitForClonedVolumeDetachment # to create
+                    fetchInstanceIp
+                    getInstanceState
+                    sshInstance
+                    detachVolume
+                    getClonedVolumeAvailibilityState
+                    waitForClonedVolumeDetachment 
                     deleteVolume
 
-
-                done
+              #  done
 
                 deleteSnapshot
             done
@@ -341,7 +353,7 @@ waitForSnapshotCompletion () {
 createVolume () {
     clonedVolumeId=$(aws ec2 create-volume $profile $region  \
     --volume-type io1 \
-    --iops 1000 \
+    --iops 100 \
     --snapshot-id $snapshotId \
     --availability-zone ap-south-1a --output text --query 'VolumeId')
 
@@ -377,12 +389,17 @@ waitForRunningScannerInstance () {
 
 attachVolume (){
     aws ec2 attach-volume $profile $region \
-    --device /dev/sdfabc \
+    --device /dev/sdf \
     --instance-id $scannerInstanceId \
     --volume-id $clonedVolumeId
 
     
     echo "Initiated attachment of $clonedVolumeId with $scannerInstanceId"
+}
+
+detachVolume () {
+    aws ec2 detach-volume --volume-id $clonedVolumeId $profile $region
+    echo "Initiated detachment of $clonedVolumeId with $scannerInstanceId"
 }
 
 
@@ -406,6 +423,30 @@ waitForClonedVolumeAttachment () {
 }
 
 
+getClonedVolumeAvailibilityState () {
+    clonedVolumeAvailibilityState=$(aws ec2 describe-volumes --volume-id $clonedVolumeId $profile $region \
+    --output text  --query 'Volumes[].State')
+
+}
+
+
+
+
+
+
+waitForClonedVolumeDetachment () {
+    if [[ "$clonedVolumeAvailibilityState" = "$inuseState" ]];then 
+        echo "Cloned Volume $clonedVolumeId in still in $clonedVolumeState state. Please wait while volume is detached from instance"
+        sleep 5
+        getClonedVolumeAvailibilityState
+        waitForClonedVolumeDetachment
+    else
+        echo "Volume $clonedVolumeId ($clonedVolumeName) has now been detached from $scannerInstanceId."
+    fi
+
+}
+
+
 
 fetchInstanceIp (){
     instanceIpAddress=$(aws ec2 describe-instances --instance-id  $scannerInstanceId $profile $region \
@@ -421,7 +462,7 @@ sshInstance () {
 
     echo "Try manual connection: ssh -i $keyLocation -o StrictHostKeyChecking=no $username@$instanceIpAddress"
 
-    sshCommands="lsblk;pwd;whoami;df -h"
+    sshCommands="whoami"
 
     ssh -i $keyLocation -o StrictHostKeyChecking=no $username@$instanceIpAddress "$sshCommands"
 
@@ -438,7 +479,7 @@ deleteSnapshot () {
 
 
 deleteVolume () {
-    aws ec2 delete-volume --volume-id $clonedVolumeId $profile $region  > /dev/null
+    aws ec2 delete-volume --volume-id $clonedVolumeId $profile $region  
     echo "Deleted new volume $clonedVolumeId ($clonedVolumeName)"
 }
 
@@ -622,7 +663,7 @@ getBadSecurityGroups () {
 }
 
 deleteBadSecurityGroups () {
-    if ! [ -z "${badSubnetsArray[*]}" ];then 
+    if ! [ -z "${badSecurityGroupsArray[*]}" ];then 
 
         for badSecurityGroup in ${badSecurityGroupsArray[*]}; do
             aws ec2 delete-security-group --group-id $badSecurityGroup $profile $region 
@@ -727,6 +768,7 @@ forceClean () {
     detachBadInternetGWs
     deletebadInternetGWs
     getBadVPCs
+    sleep 5
     deleteBadVPCS
 
 }
@@ -771,7 +813,7 @@ prepare () {
     associatePubSubnetWithRouteTable
     createSecurityGroup
     createIngressRules
-
+    runInstance
 }
 
 
@@ -779,7 +821,7 @@ build () {
     echo ""
     echo "########## STAGE [2/5] - BUILDING INFRASTRUCTURE ##########"
     echo ""
-    runInstance
+    #runInstance
     getVolumes
     createSnapshot
     getSnapshotState
@@ -838,26 +880,32 @@ clean () {
 
 
 
-# if [[ "$1" == "$scanCmd" ]];then
+if [[ "$1" == "$scanCmd" ]];then
 
-#     prepare && build && scan
-#     sleep 1 && destroy && clean
+    prepare && build && scan
+    sleep 1 && destroy && clean
 
-# elif [[ "$1" == "$forceCleanCmd" ]];then
+elif [[ "$1" == "$forceCleanCmd" ]];then
 
-#     #forceClean
-#     forceCleanAllRegions
+    #forceClean
+    forceCleanAllRegions
 
-# elif  [ -z "$1" ]; then 
+elif [[ "$1" == "$scanAllRegionsCmd" ]];then
 
-#     echo "Arguments missing . Please use 'scan / forceclean' as arguments."
-#     echo "Expamle: ./InstaScanner.sh scan"
-#     exit
 
-# else
-#      echo "Invalid Arguments provided. Please use 'scan / forceclean' as arguments."
-#     echo "Expamle: ./InstaScanner.sh scan"
+    prepare
+    createAllRegionsInfra
 
-# fi
+elif  [ -z "$1" ]; then 
 
-createAllRegionsSnapShots
+    echo "Arguments missing . Please use 'scan / forceclean' as arguments."
+    echo "Expamle: ./InstaScanner.sh scan"
+    exit
+
+else
+     echo "Invalid Arguments provided. Please use 'scan / forceclean' as arguments."
+    echo "Expamle: ./InstaScanner.sh scan"
+
+fi
+
+#prepare && createAllRegionsInfra
