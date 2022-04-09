@@ -10,6 +10,7 @@ routeTableName="Appsec-Scanner-RouteTable-$randomID"
 securityGroupName="Appsec-Scanner-SecurityGroup-$randomID"
 scannerInstanceName="Appsec-Scanner-Ec2-Instance-$randomID"
 snapshotName="Appsec-Scanner-Ec2-Snapshot-$randomID"
+copiedSnapshotName="Appsec-Scanner-Ec2-Copied-Snapshot-$randomID"
 clonedVolumeName="Appsec-Scanner-Cloned-Volume-$randomID"
 terminatedState="terminated"
 completedState="completed"
@@ -18,7 +19,7 @@ detachedState="detached"
 inuseState="in-use"
 runningState="running"
 infraRegionName="ap-south-1"
-scannerRegionName="us-east-1"
+scannerRegionName="eu-south-1"
 username="ec2-user"
 profileName="maerifat"
 profile="--profile $profileName"
@@ -74,6 +75,82 @@ generateKey () {
 
 
 
+
+case $scannerRegionName in
+    eu-north-1)
+    AMI="ami-092cce4a19b438926"
+    ;;
+    ap-south-1)
+    AMI="ami-0851b76e8b1bce90b"
+    ;;
+    eu-west-3)
+    AMI="ami-06ad2ef8cd7012912"
+    ;;
+    eu-west-2)
+    AMI="ami-0015a39e4b7c0966f"
+    ;;
+    eu-south-1)
+    AMI="ami-0f8ce9c417115413d"
+    ;;
+    eu-west-1)
+    AMI="ami-08ca3fed11864d6bb"
+    ;;
+    ap-northeast-3)
+    AMI="ami-096c4b6e0792d8c16"
+    ;;
+    ap-northeast-2)
+    AMI="ami-0454bb2fefc7de534"
+    ;;
+    ap-northeast-1)
+    AMI="ami-088da9557aae42f39"
+    ;;
+    sa-east-1)
+    AMI="ami-090006f29ecb2d79a"
+    ;;
+    ca-central-1)
+    AMI="ami-0aee2d0182c9054ac"
+    ;;
+    ap-southeast-1)
+    AMI="ami-055d15d9cfddf7bd3"
+    ;;
+    ap-southeast-2)
+    AMI="ami-0b7dcd6e6fd797935"
+    ;;
+    ap-southeast-3)
+    AMI="ami-0a9c8e0ccf1d85f67"
+    ;;
+
+
+    eu-central-1)
+    AMI="ami-0d527b8c289b4af7f"
+    ;;
+    us-east-1)
+    AMI="ami-04505e74c0741db8d"
+    ;;
+    ap-east-1)
+    AMI="ami-0b981d9ee99b28eba"
+    ;;
+    us-west-1)
+    AMI="ami-01f87c43e618bf8f0"
+    ;;
+    us-west-2)
+    AMI="ami-0892d3c7ee96c0bf7"
+    ;;
+    us-east-2)
+    AMI="ami-0fb653ca2d3203ac1"
+    ;;
+    af-south-1)
+    AMI="ami-030b8d2037063bab3"
+    ;;
+    me-south-1)
+    AMI="ami-0b4946d7420c44be4"
+    ;;
+    
+esac
+
+echo $AMI
+
+
 findMyIp (){
     myIp=$(curl -s ifconfig.me)
     echo "You public IP address is $myIp"
@@ -109,7 +186,7 @@ getRouteTable () {
 createSubnet () {
     subnetCIDR=$(echo "$availableVPCCIDR"| awk -F "." '{$3=1; print $1 "." $2 "." $3 "." $4}')
     pubSubnetId=$(aws ec2 create-subnet --vpc-id $newVPCId --cidr-block $subnetCIDR/24 \
-    --availability-zone us-east-1a --query 'Subnet.SubnetId' --output text $profile $scannerRegion )
+    --availability-zone eu-north-1a --query 'Subnet.SubnetId' --output text $profile $scannerRegion )
     echo "New subnet $subnetCIDR/24 ($pubSubnetId) has been created."
     
     #adding tag
@@ -273,11 +350,21 @@ createSnapshot () {
 
 
 copySnapshot () {
-    copiedSnapshotId=$(aws ec2 copy-snapshot $profile $scannerVPCRegionName \
+    copiedSnapshotId=$(aws ec2 copy-snapshot $profile $scannerRegion \
     --source-region $infraRegionName --source-snapshot-id $snapshotId \
     --query 'SnapshotId' --output text)
 
+    echo "Copied $snapshotId of $infraRegionName to $scannerRegionName as $copiedSnapshotId."
+
+
+    aws ec2 create-tags --resources $copiedSnapshotId --tags "Key=Name,Value=$copiedSnapshotName" $profile $scannerRegion  > /dev/null
+    echo "Tagged $copiedSnapshotId with Name as $copiedSnapshotName"
+    echo ""
+
+
     copiedSnapshotIdsArray+=($copiedSnapshotId)
+
+    #echo "These are snapshots so far collected ${copiedSnapshotIdsArray[*]}"
 }
 
 
@@ -295,13 +382,14 @@ createAllRegionsInfra () {
 
             for snapshotId in ${snapShotsIdArray[*]};do
 
+                getSnapshotState
                 waitForSnapshotCompletion
                 copySnapshot
             done
 
         fi
 
-    echo "These are snapshotid ${snapShotsIdArray[*]}"
+    #echo "These are snapshotid ${snapShotsIdArray[*]}"
     done
 }
 
@@ -398,7 +486,7 @@ createVolume () {
     --volume-type io1 \
     --iops 100 \
     --snapshot-id $snapshotId \
-    --availability-zone ap-south-1a --output text --query 'VolumeId')
+    --availability-zone ${scannerInstanceName}a --output text --query 'VolumeId')
 
     echo "Created new volume $clonedVolumeId from $snapshotId"
 
@@ -953,4 +1041,4 @@ clean () {
 
 # fi
 
-prepare && createAllRegionsInfra
+#prepare && createAllRegionsInfra
