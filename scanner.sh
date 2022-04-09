@@ -17,12 +17,13 @@ attachedState="attached"
 detachedState="detached"
 inuseState="in-use"
 runningState="running"
-regionName="ap-south-1"
-scannerVPCRegionName="us-east-1"
+infraRegionName="ap-south-1"
+scannerRegionName="us-east-1"
 username="ec2-user"
 profileName="maerifat"
 profile="--profile $profileName"
-region="--region ${regionName}"
+infraRegion="--region ${infraRegionName}"
+scannerRegion="--region ${scannerRegionName}"
 scanCmd="scan"
 scanAllRegionsCmd="scanallregions"
 forceCleanCmd="forceclean"
@@ -38,13 +39,13 @@ getReglionList
 
 getExistingVPCs () {
 
-    for regionName in ${regionList[*]}; do 
-    aws ec2 describe-vpcs $profile $region   --output text --query 'Vpcs[].VpcId'
+    for infraRegionName in ${regionList[*]}; do 
+    aws ec2 describe-vpcs $profile $infraRegion   --output text --query 'Vpcs[].VpcId'
     done
 }
 
 getExistingVPCIps () {
-    VPCS=$(aws ec2 describe-vpcs $profile $region   --query 'Vpcs[*].CidrBlockAssociationSet[*].CidrBlock' --output text |cut -d "/" -f1|sort -u)
+    VPCS=$(aws ec2 describe-vpcs $profile $scannerRegion   --query 'Vpcs[*].CidrBlockAssociationSet[*].CidrBlock' --output text |cut -d "/" -f1|sort -u)
     VPCSarray=("$VPCS")
 }
 
@@ -64,7 +65,7 @@ findCidr () {
 
 #generate key-pair
 generateKey () {
-    aws ec2 create-key-pair --key-name $keyName  --query 'KeyMaterial' --output text $profile $region    > /tmp/$keyName.pem
+    aws ec2 create-key-pair --key-name $keyName  --query 'KeyMaterial' --output text $profile $scannerRegion    > /tmp/$keyName.pem
     echo "New SSH key has been created and saved as /tmp/$keyName.pem"
 }
 
@@ -80,27 +81,27 @@ findMyIp (){
 
 
 createVPC () {
-    newVPCId=$(aws ec2 create-vpc --cidr-block "${availableVPCCIDR}/16" --query 'Vpc.VpcId' --output text $profile $region )
+    newVPCId=$(aws ec2 create-vpc --cidr-block "${availableVPCCIDR}/16" --query 'Vpc.VpcId' --output text $profile $scannerRegion )
     echo "New VPC $newVPCId  has been created."
     
     #adding tag
-    aws ec2 create-tags --resources "${newVPCId}" --tags "Key=Name,Value=$vpcName" $profile $region 
+    aws ec2 create-tags --resources "${newVPCId}" --tags "Key=Name,Value=$vpcName" $profile $scannerRegion
     echo "Tagged $newVPCId with Name as $vpcName"
     
     #enabling dns hostnames
-    aws ec2 modify-vpc-attribute --vpc-id "$newVPCId" --enable-dns-hostnames "{\"Value\":true}" $profile $region 
+    aws ec2 modify-vpc-attribute --vpc-id "$newVPCId" --enable-dns-hostnames "{\"Value\":true}" $profile $scannerRegion 
     echo "Enabled dns host names for $newVPCId ($vpcName)"
     
 }
 
 
 getRouteTable () {
-    routeTableId=$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$newVPCId --output text $profile $region \
+    routeTableId=$(aws ec2 describe-route-tables --filters Name=vpc-id,Values=$newVPCId --output text $profile $scannerRegion \
     --query 'RouteTables[].Associations[?Main==`true`][].RouteTableId')
 
     echo "Route Table of $newVPCId is $routeTableId"
         #Adding tag
-    aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile $region 
+    aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile $scannerRegion 
     echo "Tagged $routeTableId with Name as $routeTableName"
 }
 
@@ -108,24 +109,24 @@ getRouteTable () {
 createSubnet () {
     subnetCIDR=$(echo "$availableVPCCIDR"| awk -F "." '{$3=1; print $1 "." $2 "." $3 "." $4}')
     pubSubnetId=$(aws ec2 create-subnet --vpc-id $newVPCId --cidr-block $subnetCIDR/24 \
-    --availability-zone ap-south-1a --query 'Subnet.SubnetId' --output text $profile $region )
+    --availability-zone us-east-1a --query 'Subnet.SubnetId' --output text $profile $scannerRegion )
     echo "New subnet $subnetCIDR/24 ($pubSubnetId) has been created."
     
     #adding tag
-    aws ec2 create-tags --resources $pubSubnetId --tags "Key=Name,Value=$subnetName" $profile $region 
+    aws ec2 create-tags --resources $pubSubnetId --tags "Key=Name,Value=$subnetName" $profile $scannerRegion 
     echo "Tagged $pubSubnetId with Name as $subnetName"
     
     #enabling auto assign public Ip
-    aws ec2 modify-subnet-attribute --subnet-id $pubSubnetId --map-public-ip-on-launch $profile $region 
+    aws ec2 modify-subnet-attribute --subnet-id $pubSubnetId --map-public-ip-on-launch $profile $scannerRegion 
     echo "Enabled auto assignment of public Ip to $pubSubnetId ($subnetName)"
 }
 
 
 createInternetGW () {
-    internetGWId=$(aws ec2 create-internet-gateway --query 'InternetGateway.InternetGatewayId' --output text $profile $region )
+    internetGWId=$(aws ec2 create-internet-gateway --query 'InternetGateway.InternetGatewayId' --output text $profile $scannerRegion )
     echo "Internet Gateway $internetGWId created."
     
-    aws ec2 create-tags --resources $internetGWId --tags "Key=Name,Value=$internetGWName" $profile $region 
+    aws ec2 create-tags --resources $internetGWId --tags "Key=Name,Value=$internetGWName" $profile $scannerRegion 
     echo "Tagged $internetGWId with Name as $internetGWName"
     
 }
@@ -133,18 +134,18 @@ createInternetGW () {
 
 
 attachInternetGW () {
-    aws ec2 attach-internet-gateway --vpc-id $newVPCId --internet-gateway-id $internetGWId $profile $region 
+    aws ec2 attach-internet-gateway --vpc-id $newVPCId --internet-gateway-id $internetGWId $profile $scannerRegion 
     echo "Attached Internet Gateway $internetGWId to VPC $newVPCId"
     
 }
 
 
 # createRouteTable () {
-#     routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $profile $region )
+#     routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $profile $infraRegion )
 #     echo "New route table $routeTableId has been created."
     
 #     #Adding tag
-#     aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile $region 
+#     aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile $infraRegion 
 #     echo "Tagged $routeTableId with Name as $routeTableName"
 # }
 
@@ -154,7 +155,7 @@ createRouteToInternetGW () {
     aws ec2 create-route \
     --route-table-id $routeTableId \
     --destination-cidr-block 0.0.0.0/0 \
-    --gateway-id $internetGWId $profile $region  > /dev/null
+    --gateway-id $internetGWId $profile $scannerRegion  > /dev/null
     echo "Created route for $routeTableId ($routeTableName) to $internetGWId ($internetGWName)."
 }
 
@@ -164,7 +165,7 @@ associatePubSubnetWithRouteTable (){
     --subnet-id $pubSubnetId \
     --route-table-id $routeTableId \
     --query 'AssociationId'\
-    --output text $profile $region )
+    --output text $profile $scannerRegion )
     echo "Associated ($routeTableAssociationId) route table $routeTableId with the subnet $pubSubnetId."
 }
 
@@ -175,12 +176,12 @@ createSecurityGroup () {
     securityGroupId=$(aws ec2 create-security-group \
     --vpc-id $newVPCId \
     --group-name $securityGroupName \
-    --description 'Appsec-Scanner VPC - non default security group' $profile $region )
+    --description 'Appsec-Scanner VPC - non default security group' $profile $scannerRegion )
     echo "New security group $securityGroupId ($securityGroupName) as been created."
     
     
     ##Getting security group id
-    # securityGroupId=$(aws ec2 describe-security-groups $profile $region  \
+    # securityGroupId=$(aws ec2 describe-security-groups $profile $infraRegion  \
     # --filters "Name=vpc-id,Values=$newVPCId" \
     # --output json|  jq '.SecurityGroups'|jq '.[] | select(.GroupName == "'$securityGroupName'")'|jq '.GroupId'| tr -d '"') 
     
@@ -189,7 +190,7 @@ createSecurityGroup () {
     ##Tagging security group
     aws ec2 create-tags \
     --resources $securityGroupId \
-    --tags "Key=Name,Value=$securityGroupName" $profile $region 
+    --tags "Key=Name,Value=$securityGroupName" $profile $scannerRegion 
     echo "Tagged $securityGroupId with Name as $securityGroupName"
     
     
@@ -200,7 +201,7 @@ createIngressRules () {
     ## Create security group ingress rules
     aws ec2 authorize-security-group-ingress \
     --group-id $securityGroupId \
-    --protocol tcp --port 22 --cidr "$myIp/32"  $profile $region  > /dev/null 
+    --protocol tcp --port 22 --cidr "$myIp/32"  $profile $scannerRegion  > /dev/null 
     echo "Allowing SSH from $myIp on port 22 for $securityGroupId ($securityGroupName)."
 }
 
@@ -213,9 +214,9 @@ createIngressRules () {
 
 runInstance () {
 
-    scannerInstanceId=$(aws ec2 run-instances $profile $region \
-    --image-id ami-04893cdb768d0f9ee \
-   --instance-type t2.micro \
+    scannerInstanceId=$(aws ec2 run-instances $profile $scannerRegion \
+    --image-id ami-04505e74c0741db8d \
+    --instance-type t2.micro \
     --subnet-id $pubSubnetId \
     --security-group-ids $securityGroupId \
     --associate-public-ip-address \
@@ -224,7 +225,7 @@ runInstance () {
 
     echo "Ec2 Instance $scannerInstanceId has been started."
 
-    aws ec2 create-tags --resources $scannerInstanceId --tags "Key=Name,Value=$scannerInstanceName" $profile $region  > /dev/null
+    aws ec2 create-tags --resources $scannerInstanceId --tags "Key=Name,Value=$scannerInstanceName" $profile $scannerRegion  > /dev/null
 }
 
 
@@ -240,10 +241,10 @@ runInstance () {
 #for tempRegion in  ${regionList[*]};do  \
 
 getVolumes () {
-volumeIdsArray=($(aws ec2 describe-volumes $profile $region   \
+volumeIdsArray=($(aws ec2 describe-volumes $profile $infraRegion   \
 --output text --query 'Volumes[].VolumeId' --output text))
 
-echo "Collected Volumes on region $regionName"
+echo "Collected Volumes on region $infraRegionName"
 echo ${volumeIdsArray[*]}
 totalVolumes=${#volumeIdsArray[@]}
 ((lastVolumeNumber=$totalVolumes-1))
@@ -257,13 +258,13 @@ createSnapshot () {
 
     for volumeNumber in $(seq 0 $lastVolumeNumber ) ;do 
 
-        snapshotId=$(aws ec2 create-snapshot $profile $region  --volume-id ${volumeIdsArray[$volumeNumber]}  \
+        snapshotId=$(aws ec2 create-snapshot $profile $infraRegion  --volume-id ${volumeIdsArray[$volumeNumber]}  \
         --description "This snapshot has been created by appsec scanner." --query 'SnapshotId' --output text)
         echo "Created snapshot $snapshotId of volume ${volumeIdsArray[$volumeNumber]} "
         
         snapShotsIdArray+=($snapshotId)
 
-        aws ec2 create-tags --resources $snapshotId --tags "Key=Name,Value=$snapshotName" $profile $region  > /dev/null
+        aws ec2 create-tags --resources $snapshotId --tags "Key=Name,Value=$snapshotName" $profile $infraRegion  > /dev/null
         echo "Tagged $snapshotId with Name as $snapshotName"
         echo ""
    done
@@ -272,38 +273,74 @@ createSnapshot () {
 
 
 copySnapshot () {
-    aws ec2 copy-snapshot $profile --destination-region $scannerVPCRegionName \
-    --source-region $regionName --source-snapshot-id $snapshotId 
+    copiedSnapshotId=$(aws ec2 copy-snapshot $profile $scannerVPCRegionName \
+    --source-region $infraRegionName --source-snapshot-id $snapshotId \
+    --query 'SnapshotId' --output text)
+
+    copiedSnapshotIdsArray+=($copiedSnapshotId)
 }
 
 
 
 
 createAllRegionsInfra () {
-
-    for regionName in ${regionList[*]};do
-        region="--region $regionName"
-        echo "we are searching $regionName"
+    for infraRegionName in ${regionList[*]};do
+        infraRegion="--region $infraRegionName"
+        scannerRegion="--region $scannerRegionName"
+        echo "we are searching $infraRegionName"
         getVolumes
 
         if ! [ -z "${volumeIdsArray[*]}" ];then 
             createSnapshot
 
             for snapshotId in ${snapShotsIdArray[*]};do
+
                 waitForSnapshotCompletion
+                copySnapshot
+            done
+
+        fi
+
+    echo "These are snapshotid ${snapShotsIdArray[*]}"
+    done
+}
+
+
+
+
+
+copyAllRegionsInfra () {
+
+    for infraRegionName in ${regionList[*]};do
+        infraRegion="--region $infraRegionName"
+        scannerRegion"--region $scannerRegionName"
+
+        echo "we are searching $infraRegionName"
+        getVolumes
+
+        if ! [ -z "${volumeIdsArray[*]}" ];then 
+            createSnapshot
+
+            for snapshotId in ${snapShotsIdArray[*]};do
+
+
+                
+                waitForSnapshotCompletion
+                copySnapshot
+                
                 createVolume
 
                 #for clonedVolumeId in ${clonedVolumeIdsArray[*]};do
-                    waitForRunningScannerInstance
-                    attachVolume
-                    waitForClonedVolumeAttachment
-                    fetchInstanceIp
-                    getInstanceState
-                    sshInstance
-                    detachVolume
-                    getClonedVolumeAvailibilityState
-                    waitForClonedVolumeDetachment 
-                    deleteVolume
+                waitForRunningScannerInstance
+                attachVolume
+                waitForClonedVolumeAttachment
+                fetchInstanceIp
+                getInstanceState
+                sshInstance
+                detachVolume
+                getClonedVolumeAvailibilityState
+                waitForClonedVolumeDetachment 
+                deleteVolume
 
               #  done
 
@@ -319,6 +356,12 @@ createAllRegionsInfra () {
 }
 
 
+
+
+
+
+
+
 getSnapshots () {
     echo ""
 }
@@ -330,7 +373,7 @@ getSnapshots () {
 
 
 getSnapshotState () {
-    snapshotState=$(aws ec2 describe-snapshots --snapshot-id $snapshotId  $profile $region  --output text \
+    snapshotState=$(aws ec2 describe-snapshots --snapshot-id $snapshotId  $profile $infraRegion  --output text \
     --query 'Snapshots[].State')
 
 }
@@ -351,7 +394,7 @@ waitForSnapshotCompletion () {
 
 
 createVolume () {
-    clonedVolumeId=$(aws ec2 create-volume $profile $region  \
+    clonedVolumeId=$(aws ec2 create-volume $profile $scannerRegion  \
     --volume-type io1 \
     --iops 100 \
     --snapshot-id $snapshotId \
@@ -361,7 +404,7 @@ createVolume () {
 
     clonedVolumeIdsArray+=($clonedVolumeId)
 
-    aws ec2 create-tags --resources $clonedVolumeId --tags "Key=Name,Value=$clonedVolumeName" $profile $region  > /dev/null
+    aws ec2 create-tags --resources $clonedVolumeId --tags "Key=Name,Value=$clonedVolumeName" $profile $infraRegion  > /dev/null
     echo "Tagged $clonedVolumeId with Name as $clonedVolumeName"
     
 }
@@ -388,7 +431,7 @@ waitForRunningScannerInstance () {
 
 
 attachVolume (){
-    aws ec2 attach-volume $profile $region \
+    aws ec2 attach-volume $profile $scannerRegion \
     --device /dev/sdf \
     --instance-id $scannerInstanceId \
     --volume-id $clonedVolumeId
@@ -398,13 +441,13 @@ attachVolume (){
 }
 
 detachVolume () {
-    aws ec2 detach-volume --volume-id $clonedVolumeId $profile $region
+    aws ec2 detach-volume --volume-id $clonedVolumeId $profile $scannerRegion
     echo "Initiated detachment of $clonedVolumeId with $scannerInstanceId"
 }
 
 
 getClonedVolumeState () {
-    clonedVolumeState=$(aws ec2 describe-volumes --volume-id $clonedVolumeId $profile $region  \
+    clonedVolumeState=$(aws ec2 describe-volumes --volume-id $clonedVolumeId $profile $scannerRegion  \
      --output text  --query 'Volumes[].Attachments[].State')
 
 }
@@ -424,7 +467,7 @@ waitForClonedVolumeAttachment () {
 
 
 getClonedVolumeAvailibilityState () {
-    clonedVolumeAvailibilityState=$(aws ec2 describe-volumes --volume-id $clonedVolumeId $profile $region \
+    clonedVolumeAvailibilityState=$(aws ec2 describe-volumes --volume-id $clonedVolumeId $profile $scannerRegion \
     --output text  --query 'Volumes[].State')
 
 }
@@ -449,7 +492,7 @@ waitForClonedVolumeDetachment () {
 
 
 fetchInstanceIp (){
-    instanceIpAddress=$(aws ec2 describe-instances --instance-id  $scannerInstanceId $profile $region \
+    instanceIpAddress=$(aws ec2 describe-instances --instance-id  $scannerInstanceId $profile $scannerRegion \
     --output text  --query 'Reservations[].Instances[].PublicIpAddress')
     echo "Public Ip address of $scannerInstanceId is $instanceIpAddress"
 }
@@ -470,16 +513,19 @@ sshInstance () {
 
 
 
-
+deleteCopiedSnapshot () {
+    aws ec2 delete-snapshot $profile $scannerRegion  --snapshot-id $copiedSnapshotId
+    echo "Delete snapshot $snapshotId ($snapshotName)"
+}
 
 deleteSnapshot () {
-    aws ec2 delete-snapshot $profile $region  --snapshot-id $snapshotId 
+    aws ec2 delete-snapshot $profile $infraRegion  --snapshot-id $snapshotId 
     echo "Delete snapshot $snapshotId ($snapshotName)"
 }
 
 
 deleteVolume () {
-    aws ec2 delete-volume --volume-id $clonedVolumeId $profile $region  
+    aws ec2 delete-volume --volume-id $clonedVolumeId $profile $scannerRegion  
     echo "Deleted new volume $clonedVolumeId ($clonedVolumeName)"
 }
 
@@ -489,14 +535,14 @@ deleteVolume () {
 ####
 
 terminateInstance () {
-    aws ec2 terminate-instances --instance-ids $scannerInstanceId $profile $region  > /dev/null
+    aws ec2 terminate-instances --instance-ids $scannerInstanceId $profile $scannerRegion  > /dev/null
     echo "Initiated termination of Ec2 instance $scannerInstanceId ($scannerInstanceName)."
 }
 
 
 
 getInstanceState () {
-    instanceState=$(aws ec2 describe-instances --instance-id $scannerInstanceId  $profile $region \
+    instanceState=$(aws ec2 describe-instances --instance-id $scannerInstanceId  $profile $scannerRegion \
     --output text --query 'Reservations[].Instances[].State.Name')
 
 }
@@ -516,50 +562,50 @@ waitForInstanceTermination () {
 
 deleteSecurityGroup () {
     ## Delete custom security group
-    aws ec2 delete-security-group --group-id $securityGroupId $profile $region 
+    aws ec2 delete-security-group --group-id $securityGroupId $profile $scannerRegion
     echo "Deleted security group $securityGroupId ($securityGroupName)"
 }
 
 
 detachInternetGW (){
-    aws ec2 detach-internet-gateway --internet-gateway-id $internetGWId  --vpc-id $newVPCId $profile $region 
+    aws ec2 detach-internet-gateway --internet-gateway-id $internetGWId  --vpc-id $newVPCId $profile $scannerRegion 
     echo "Detached Internet Gateway $internetGWId from VPC $newVPCId"
 }
 
 
 deleteInternetGW () {
-    aws ec2 delete-internet-gateway --internet-gateway-id $internetGWId $profile $region 
+    aws ec2 delete-internet-gateway --internet-gateway-id $internetGWId $profile $scannerRegion
     echo "Deleted Internet Gateway $internetGWId ($internetGWName)"
 }
 
 
 
 disassociatePubSubnetFromRouteTable () {
-    aws ec2 disassociate-route-table --association-id $routeTableAssociationId $profile $region 
+    aws ec2 disassociate-route-table --association-id $routeTableAssociationId $profile $scannerRegion
     echo "Disassociated route table ($routeTableId) from the subnet ($pubSubnetId)."
 }
 
 
 
 # deleteRouteTable () {
-#     aws ec2 delete-route-table --route-table-id $routeTableId $profile $region 
+#     aws ec2 delete-route-table --route-table-id $routeTableId $profile $infraRegion 
 #     echo "Deleted route table $routeTableId ($routeTableName)"
 # }
 
 
 deleteSubnet () {
-    aws ec2 delete-subnet --subnet-id "$pubSubnetId" $profile $region 
+    aws ec2 delete-subnet --subnet-id "$pubSubnetId" $profile $scannerRegion 
     echo "Subnet $subnetCIDR/24 ($pubSubnetId) has been deleted."
 }
 
 deleteKey () {
-    aws ec2 delete-key-pair --key-name $keyName $profile $region  --output json
+    aws ec2 delete-key-pair --key-name $keyName $profile $scannerRegion  --output json
     rm -f /tmp/$keyName.pem
     echo "SSH key has been deleted and /tmp/$keyName.pem has been removed."
 }
 
 deleteVPC () {
-    aws ec2 delete-vpc --vpc-id "$newVPCId" $profile $region 
+    aws ec2 delete-vpc --vpc-id "$newVPCId" $profile $scannerRegion
     echo "VPC $newVPCId ($vpcName) has been deleted."
     echo "Scan Completed, Your system is infected."|espeak -p 50 -s 130
     echo ""
@@ -573,7 +619,7 @@ deleteVPC () {
 
 getBadInstances () {
     
-    badInstancesArray=($(aws ec2 describe-instances $profile $region  --output text --filters Name=tag:Name,Values=$scannerInstanceName \
+    badInstancesArray=($(aws ec2 describe-instances $profile $infraRegion  --output text --filters Name=tag:Name,Values=$scannerInstanceName \
     --query 'Reservations[].Instances[].InstanceId'))
 
     if ! [ -z "${badInstancesArray[*]}" ];then 
@@ -591,7 +637,7 @@ terminateBadInstances () {
 
         for badInstance in ${badInstancesArray[*]};do
 
-            aws ec2 terminate-instances --instance-ids $badInstance $profile $region  
+            aws ec2 terminate-instances --instance-ids $badInstance $profile $infraRegion  
             echo "Initiated termination of backlog instances"
         done
 
@@ -607,7 +653,7 @@ getBadInstancesStates () {
 
     if ! [ -z "${badInstancesArray[*]}" ];then 
 
-        badInstancesState=$(aws ec2 describe-instances $profile $region  --output text --filters Name=tag:Name,Values=$scannerInstanceName \
+        badInstancesState=$(aws ec2 describe-instances $profile $infraRegion  --output text --filters Name=tag:Name,Values=$scannerInstanceName \
         --query 'Reservations[].Instances[].State.Name'|xargs| tr " " "\n"|sort -u)
     fi
 }
@@ -632,7 +678,7 @@ waitForBadInstancesTermination () {
 
 
 getBadSubnets () {
-    badSubnetsArray=($(aws ec2 describe-subnets $profile $region  \
+    badSubnetsArray=($(aws ec2 describe-subnets $profile $infraRegion  \
     --output text --filters Name=tag:Name,Values=$subnetName --query 'Subnets[].SubnetId'))
 
 }
@@ -645,7 +691,7 @@ deleteBadSubnets () {
     if ! [ -z "${badSubnetsArray[*]}" ];then 
 
         for badSubnet in ${badSubnetsArray[*]}; do
-            aws ec2 delete-subnet --subnet-id $badSubnet $profile $region 
+            aws ec2 delete-subnet --subnet-id $badSubnet $profile $infraRegion 
         done
         echo "Deleted Backlog Subnets: ${badSubnetsArray[*]}"
 
@@ -658,7 +704,7 @@ deleteBadSubnets () {
 
 
 getBadSecurityGroups () {
-    badSecurityGroupsArray=($(aws ec2 describe-security-groups $profile $region  \
+    badSecurityGroupsArray=($(aws ec2 describe-security-groups $profile $infraRegion  \
     --output text --filters Name=tag:Name,Values=$securityGroupName --query 'SecurityGroups[].GroupId'))
 }
 
@@ -666,7 +712,7 @@ deleteBadSecurityGroups () {
     if ! [ -z "${badSecurityGroupsArray[*]}" ];then 
 
         for badSecurityGroup in ${badSecurityGroupsArray[*]}; do
-            aws ec2 delete-security-group --group-id $badSecurityGroup $profile $region 
+            aws ec2 delete-security-group --group-id $badSecurityGroup $profile $infraRegion 
         done
         echo "Deleted Backlog Security Groups: ${badSecurityGroupsArray[*]}"
 
@@ -679,7 +725,7 @@ deleteBadSecurityGroups () {
 
 
 getBadInternetGWs () {
-    badInternetGWIdsArray=($(aws ec2 describe-internet-gateways $profile $region \
+    badInternetGWIdsArray=($(aws ec2 describe-internet-gateways $profile $infraRegion \
     --output text --filters Name=tag:Name,Values=$internetGWName --query 'InternetGateways[].InternetGatewayId'))
 
 }
@@ -691,12 +737,12 @@ detachBadInternetGWs () {
     
         for badInternetGWId in ${badInternetGWIdsArray[*]}; do
 
-            attachedBadVPCId=$(aws ec2 describe-internet-gateways  --internet-gateway-ids $badInternetGWId $profile $region  \
+            attachedBadVPCId=$(aws ec2 describe-internet-gateways  --internet-gateway-ids $badInternetGWId $profile $infraRegion  \
             --output text --query 'InternetGateways[].Attachments[].VpcId')
 
             if ! [ -z "$attachedBadVPCId" ];then 
 
-                aws ec2 detach-internet-gateway --internet-gateway-id $badInternetGWId  --vpc-id $attachedBadVPCId $profile $region 
+                aws ec2 detach-internet-gateway --internet-gateway-id $badInternetGWId  --vpc-id $attachedBadVPCId $profile $infraRegion 
                 echo "Detached internet gateway $badInternetGWId from VPC $attachedBadVPCId"
             else
                 echo "$badInternetGWId is already detached"
@@ -716,7 +762,7 @@ deletebadInternetGWs ()
     if ! [ -z "${badInternetGWIdsArray[*]}" ];then
 
         for badInternetGWId in ${badInternetGWIdsArray[*]}; do
-            aws ec2 delete-internet-gateway --internet-gateway-id $badInternetGWId $profile $region 
+            aws ec2 delete-internet-gateway --internet-gateway-id $badInternetGWId $profile $infraRegion 
             echo "Deleted internet gateway $badInternetGWId"
         done
     
@@ -729,7 +775,7 @@ deletebadInternetGWs ()
 
 
 getBadVPCs () {
-    badVPCsArray=($(aws ec2 describe-vpcs $profile $region  --output text --filters Name=tag:Name,Values=Appsec-Scanner-VPC-abc \
+    badVPCsArray=($(aws ec2 describe-vpcs $profile $infraRegion  --output text --filters Name=tag:Name,Values=Appsec-Scanner-VPC-abc \
     --query 'Vpcs[].VpcId'))
 
 }
@@ -740,7 +786,7 @@ deleteBadVPCS () {
     if ! [ -z "${badInternetGWIdsArray[*]}" ];then
 
         for badVPC in ${badVPCsArray[*]}; do
-            aws ec2 delete-vpc --vpc-id "$badVPC" $profile $region 
+            aws ec2 delete-vpc --vpc-id "$badVPC" $profile $infraRegion 
             echo "Deleted backlog VPC $badVPC."
         done
 
@@ -780,11 +826,11 @@ forceCleanAllRegions () {
     echo "########## FORCE CLEANING ##########"
     regionNumber=1
   
-    for regionName in ${regionList[*]};do
+    for infraRegionName in ${regionList[*]};do
 
-        region="--region $regionName"
+        infraRegion="--region $infraRegionName"
         echo ""
-        echo "########## $regionName region is being cleaned. [$regionNumber / $totalRegions] ##########"
+        echo "########## $infraRegionName region is being cleaned. [$regionNumber / $totalRegions] ##########"
         forceClean
         ((regionNumber++))
         
@@ -880,32 +926,31 @@ clean () {
 
 
 
-if [[ "$1" == "$scanCmd" ]];then
+# if [[ "$1" == "$scanCmd" ]];then
 
-    prepare && build && scan
-    sleep 1 && destroy && clean
+#     prepare && build && scan
+#     sleep 1 && destroy && clean
 
-elif [[ "$1" == "$forceCleanCmd" ]];then
+# elif [[ "$1" == "$forceCleanCmd" ]];then
 
-    #forceClean
-    forceCleanAllRegions
+#     #forceClean
+#     forceCleanAllRegions
 
-elif [[ "$1" == "$scanAllRegionsCmd" ]];then
+# elif [[ "$1" == "$scanAllRegionsCmd" ]];then
 
+#     prepare
+#     createAllRegionsInfra
 
-    prepare
-    createAllRegionsInfra
+# elif  [ -z "$1" ]; then 
 
-elif  [ -z "$1" ]; then 
+#     echo "Arguments missing . Please use 'scan / forceclean' as arguments."
+#     echo "Expamle: ./InstaScanner.sh scan"
+#     exit
 
-    echo "Arguments missing . Please use 'scan / forceclean' as arguments."
-    echo "Expamle: ./InstaScanner.sh scan"
-    exit
+# else
+#      echo "Invalid Arguments provided. Please use 'scan / forceclean' as arguments."
+#     echo "Expamle: ./InstaScanner.sh scan"
 
-else
-     echo "Invalid Arguments provided. Please use 'scan / forceclean' as arguments."
-    echo "Expamle: ./InstaScanner.sh scan"
+# fi
 
-fi
-
-#prepare && createAllRegionsInfra
+prepare && createAllRegionsInfra
