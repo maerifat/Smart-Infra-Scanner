@@ -16,11 +16,12 @@ terminatedState="terminated"
 completedState="completed"
 attachedState="attached"
 detachedState="detached"
+availableState="available"
 inuseState="in-use"
 runningState="running"
 infraRegionName="ap-south-1"
 scannerRegionName="eu-south-1"
-username="ec2-user"
+username="ubuntu"
 profileName="maerifat"
 profile="--profile $profileName"
 infraRegion="--region ${infraRegionName}"
@@ -119,8 +120,6 @@ case $scannerRegionName in
     ap-southeast-3)
     AMI="ami-0a9c8e0ccf1d85f67"
     ;;
-
-
     eu-central-1)
     AMI="ami-0d527b8c289b4af7f"
     ;;
@@ -186,7 +185,7 @@ getRouteTable () {
 createSubnet () {
     subnetCIDR=$(echo "$availableVPCCIDR"| awk -F "." '{$3=1; print $1 "." $2 "." $3 "." $4}')
     pubSubnetId=$(aws ec2 create-subnet --vpc-id $newVPCId --cidr-block $subnetCIDR/24 \
-    --availability-zone eu-north-1a --query 'Subnet.SubnetId' --output text $profile $scannerRegion )
+    --availability-zone "${scannerRegionName}a" --query 'Subnet.SubnetId' --output text $profile $scannerRegion )
     echo "New subnet $subnetCIDR/24 ($pubSubnetId) has been created."
     
     #adding tag
@@ -217,14 +216,14 @@ attachInternetGW () {
 }
 
 
-# createRouteTable () {
-#     routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $profile $infraRegion )
-#     echo "New route table $routeTableId has been created."
+createRouteTable () {
+    routeTableId=$(aws ec2 create-route-table --vpc-id $newVPCId  --query 'RouteTable.RouteTableId' --output text $profile $infraRegion )
+    echo "New route table $routeTableId has been created."
     
-#     #Adding tag
-#     aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile $infraRegion 
-#     echo "Tagged $routeTableId with Name as $routeTableName"
-# }
+    #Adding tag
+    aws ec2 create-tags --resources $routeTableId --tags "Key=Name,Value=$routeTableName" $profile $infraRegion 
+    echo "Tagged $routeTableId with Name as $routeTableName"
+}
 
 
 createRouteToInternetGW () {
@@ -292,8 +291,8 @@ createIngressRules () {
 runInstance () {
 
     scannerInstanceId=$(aws ec2 run-instances $profile $scannerRegion \
-    --image-id ami-04505e74c0741db8d \
-    --instance-type t2.micro \
+    --image-id $AMI \
+    --instance-type t3.micro \
     --subnet-id $pubSubnetId \
     --security-group-ids $securityGroupId \
     --associate-public-ip-address \
@@ -350,6 +349,7 @@ createSnapshot () {
 
 
 copySnapshot () {
+    
     copiedSnapshotId=$(aws ec2 copy-snapshot $profile $scannerRegion \
     --source-region $infraRegionName --source-snapshot-id $snapshotId \
     --query 'SnapshotId' --output text)
@@ -358,6 +358,7 @@ copySnapshot () {
 
 
     aws ec2 create-tags --resources $copiedSnapshotId --tags "Key=Name,Value=$copiedSnapshotName" $profile $scannerRegion  > /dev/null
+    aws ec2 create-tags --resources $copiedSnapshotId --tags "Key=copiedFrom,Value=$snapshotId" $profile $scannerRegion  > /dev/null
     echo "Tagged $copiedSnapshotId with Name as $copiedSnapshotName"
     echo ""
 
@@ -370,7 +371,7 @@ copySnapshot () {
 
 
 
-createAllRegionsInfra () {
+copyAllRegionsInfra () {
     for infraRegionName in ${regionList[*]};do
         infraRegion="--region $infraRegionName"
         scannerRegion="--region $scannerRegionName"
@@ -378,6 +379,8 @@ createAllRegionsInfra () {
         getVolumes
 
         if ! [ -z "${volumeIdsArray[*]}" ];then 
+
+            #nullify here the array snapshotidsarra
             createSnapshot
 
             for snapshotId in ${snapShotsIdArray[*]};do
@@ -385,6 +388,8 @@ createAllRegionsInfra () {
                 getSnapshotState
                 waitForSnapshotCompletion
                 copySnapshot
+                
+                
             done
 
         fi
@@ -395,9 +400,39 @@ createAllRegionsInfra () {
 
 
 
+createAllRegionsVolumes () {
+    for copiedSnapshotId in ${copiedSnapshotIdsArray[*]};do
+        getCopiedSnapshotState
+        waitForCopiedSnapshotCompletion
+        createVolume
+    done 
+}
 
 
-copyAllRegionsInfra () {
+
+scanAllRegionsVolumes () {
+
+    for clonedVolumeId in ${clonedVolumeIdsArray[*]}; do
+        getClonedVolumeAvailibilityState
+        waitForClonedVolumeAvailibility
+        getInstanceState
+        waitForRunningScannerInstance
+        attachVolume
+        getClonedVolumeState
+        waitForClonedVolumeAttachment
+        sshInstance
+        detachVolume
+        getClonedVolumeAvailibilityState
+        waitForClonedVolumeDetachment
+
+    done
+
+}
+
+
+
+
+nextCopyAllRegionsInfra () {
 
     for infraRegionName in ${regionList[*]};do
         infraRegion="--region $infraRegionName"
@@ -463,8 +498,9 @@ getSnapshots () {
 getSnapshotState () {
     snapshotState=$(aws ec2 describe-snapshots --snapshot-id $snapshotId  $profile $infraRegion  --output text \
     --query 'Snapshots[].State')
-
 }
+
+
 
 waitForSnapshotCompletion () {
     if [[ "$snapshotState" != "$completedState" ]];then 
@@ -475,8 +511,37 @@ waitForSnapshotCompletion () {
     else
         echo "Snapshot $snapshotId ($snapshotName) has now been created."
     fi
+}
+
+
+
+
+
+
+
+getCopiedSnapshotState () {
+    copiedSnapshotState=$(aws ec2 describe-snapshots --snapshot-id $copiedSnapshotId  $profile $scannerRegion  --output text \
+    --query 'Snapshots[].State')
 
 }
+
+waitForCopiedSnapshotCompletion () {
+    if [[ "$copiedSnapshotState" != "$completedState" ]];then 
+        echo "Snapshot $copiedSnapshotId in still in $copiedSnapshotState state. Please wait while snapshot is created."
+        sleep 20
+        getCopiedSnapshotState
+        waitForCopiedSnapshotCompletion 
+    else
+        echo "Snapshot $copiedSnapshotId ($copiedSnapshotName) has now been created."
+    fi
+
+}
+
+
+
+
+
+
 
 
 
@@ -485,14 +550,14 @@ createVolume () {
     clonedVolumeId=$(aws ec2 create-volume $profile $scannerRegion  \
     --volume-type io1 \
     --iops 100 \
-    --snapshot-id $snapshotId \
-    --availability-zone ${scannerInstanceName}a --output text --query 'VolumeId')
+    --snapshot-id $copiedSnapshotId \
+    --availability-zone ${scannerRegionName}a --output text --query 'VolumeId')
 
     echo "Created new volume $clonedVolumeId from $snapshotId"
 
     clonedVolumeIdsArray+=($clonedVolumeId)
 
-    aws ec2 create-tags --resources $clonedVolumeId --tags "Key=Name,Value=$clonedVolumeName" $profile $infraRegion  > /dev/null
+    aws ec2 create-tags --resources $clonedVolumeId --tags "Key=Name,Value=$clonedVolumeName" $profile $scannerRegion  > /dev/null
     echo "Tagged $clonedVolumeId with Name as $clonedVolumeName"
     
 }
@@ -501,8 +566,8 @@ createVolume () {
 
 
 waitForRunningScannerInstance () {
-    if [[ "$instanceState" != "$runningState" ]];then 
 
+    if [[ "$instanceState" != "$runningState" ]];then 
 
         echo "Instance $scannerInstanceId in still in $instanceState state. Please wait while the instance starts running."
         sleep 5
@@ -552,6 +617,22 @@ waitForClonedVolumeAttachment () {
     fi
 
 }
+
+
+
+waitForClonedVolumeAvailibility () {
+    if [[ "$clonedVolumeState" != "$availableState" ]];then 
+        echo "Cloned Volume $clonedVolumeId in still in $clonedVolumeState state. Please wait while volume is created"
+        sleep 5
+        getClonedVolumeState
+        waitForClonedVolumeAvailibility
+    else
+        echo "Volume $clonedVolumeId ($clonedVolumeName) is now available to be attached."
+    fi
+
+}
+
+
 
 
 getClonedVolumeAvailibilityState () {
@@ -675,10 +756,10 @@ disassociatePubSubnetFromRouteTable () {
 
 
 
-# deleteRouteTable () {
-#     aws ec2 delete-route-table --route-table-id $routeTableId $profile $infraRegion 
-#     echo "Deleted route table $routeTableId ($routeTableName)"
-# }
+deleteRouteTable () {
+    aws ec2 delete-route-table --route-table-id $routeTableId $profile $infraRegion 
+    echo "Deleted route table $routeTableId ($routeTableName)"
+}
 
 
 deleteSubnet () {
@@ -927,7 +1008,6 @@ forceCleanAllRegions () {
 
 
 
-
 ###Final call
 prepare () {
     echo ""
@@ -947,8 +1027,11 @@ prepare () {
     associatePubSubnetWithRouteTable
     createSecurityGroup
     createIngressRules
-    runInstance
+    #runInstance
 }
+
+
+
 
 
 build () {
@@ -1014,31 +1097,34 @@ clean () {
 
 
 
-# if [[ "$1" == "$scanCmd" ]];then
+if [[ "$1" == "$scanCmd" ]];then
 
-#     prepare && build && scan
-#     sleep 1 && destroy && clean
+    prepare && build && scan
+    sleep 1 && destroy && clean
 
-# elif [[ "$1" == "$forceCleanCmd" ]];then
+elif [[ "$1" == "$forceCleanCmd" ]];then
 
-#     #forceClean
-#     forceCleanAllRegions
+    #forceClean
+    forceCleanAllRegions
 
-# elif [[ "$1" == "$scanAllRegionsCmd" ]];then
+elif [[ "$1" == "$scanAllRegionsCmd" ]];then
 
-#     prepare
-#     createAllRegionsInfra
+    prepare
+    copyAllRegionsInfra
+    runInstance
+    createAllRegionsVolumes
+    scanAllRegionsVolumes
 
-# elif  [ -z "$1" ]; then 
+elif  [ -z "$1" ]; then 
 
-#     echo "Arguments missing . Please use 'scan / forceclean' as arguments."
-#     echo "Expamle: ./InstaScanner.sh scan"
-#     exit
+    echo "Arguments missing . Please use 'scan / forceclean' as arguments."
+    echo "Expamle: ./InstaScanner.sh scan"
+    exit
 
-# else
-#      echo "Invalid Arguments provided. Please use 'scan / forceclean' as arguments."
-#     echo "Expamle: ./InstaScanner.sh scan"
+else
+     echo "Invalid Arguments provided. Please use 'scan / forceclean' as arguments."
+    echo "Expamle: ./InstaScanner.sh scan"
 
-# fi
+fi
 
 #prepare && createAllRegionsInfra
