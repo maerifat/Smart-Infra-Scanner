@@ -463,6 +463,7 @@ nextCopyAllRegionsInfra () {
                 waitForClonedVolumeAttachment
                 fetchInstanceIp
                 getInstanceState
+                fetchInstanceIp
                 sshInstance
                 detachVolume
                 getClonedVolumeAvailibilityState
