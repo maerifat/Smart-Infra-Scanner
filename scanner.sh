@@ -357,6 +357,8 @@ copySnapshot () {
     echo "Copied $snapshotId of $infraRegionName to $scannerRegionName as $copiedSnapshotId."
 
 
+
+
     aws ec2 create-tags --resources $copiedSnapshotId --tags "Key=Name,Value=$copiedSnapshotName" $profile $scannerRegion  > /dev/null
     aws ec2 create-tags --resources $copiedSnapshotId --tags "Key=copiedFrom,Value=$snapshotId" $profile $scannerRegion  > /dev/null
     echo "Tagged $copiedSnapshotId with Name as $copiedSnapshotName"
@@ -380,6 +382,8 @@ copyAllRegionsInfra () {
 
         if ! [ -z "${volumeIdsArray[*]}" ];then 
 
+
+            snapShotsIdArray=()
             #nullify here the array snapshotidsarra
             createSnapshot
 
@@ -621,10 +625,10 @@ waitForClonedVolumeAttachment () {
 
 
 waitForClonedVolumeAvailibility () {
-    if [[ "$clonedVolumeState" != "$availableState" ]];then 
-        echo "Cloned Volume $clonedVolumeId in still in $clonedVolumeState state. Please wait while volume is created"
+    if [[ "$clonedVolumeAvailibilityState" != "$availableState" ]];then 
+        echo "Cloned Volume $clonedVolumeId in still in $clonedVolumeAvailibilityState state. Please wait while volume is created"
         sleep 5
-        getClonedVolumeState
+        getClonedVolumeAvailibilityState 
         waitForClonedVolumeAvailibility
     else
         echo "Volume $clonedVolumeId ($clonedVolumeName) is now available to be attached."
@@ -638,6 +642,7 @@ waitForClonedVolumeAvailibility () {
 getClonedVolumeAvailibilityState () {
     clonedVolumeAvailibilityState=$(aws ec2 describe-volumes --volume-id $clonedVolumeId $profile $scannerRegion \
     --output text  --query 'Volumes[].State')
+    echo "you current state for the cloned volume $clonedVolumeId is $clonedVolumeAvailibilityState"
 
 }
 
